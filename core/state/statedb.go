@@ -28,6 +28,7 @@ import (
 	"github.com/ethereum/go-ethereum/common/gopool"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/state/snapshot"
+	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/log"
@@ -141,6 +142,9 @@ type StateDB struct {
 
 	// Testing hooks
 	onCommit func(states *triestate.Set) // Hook invoked when commit is performed
+
+	// Pipeline tracing hooks
+	hooks *tracing.Hooks
 }
 
 // New creates a new state from a given trie.
@@ -173,6 +177,11 @@ func New(root common.Hash, db Database, snaps *snapshot.Tree) (*StateDB, error) 
 		sdb.snap = sdb.snaps.Snapshot(root)
 	}
 	return sdb, nil
+}
+
+// SetHooks sets the tracing hooks for the state database.
+func (s *StateDB) SetHooks(hooks *tracing.Hooks) {
+	s.hooks = hooks
 }
 
 // StartPrefetcher initializes a new trie prefetcher to pull in nodes from the
@@ -1283,6 +1292,8 @@ func (s *StateDB) Commit(block uint64, deleteEmptyObjects bool) (common.Hash, er
 		storageTrieNodesDeleted int
 		nodes                   = trienode.NewMergedNodeSet()
 		codeWriter              = s.db.DiskDB().NewBatch()
+		// Collect codes for pipeline tracing before they are marked as not dirty
+		hookCodes = make(map[common.Hash][]byte)
 	)
 	// Handle all state deletions first
 	incomplete, err := s.handleDestruction(nodes)
@@ -1298,6 +1309,10 @@ func (s *StateDB) Commit(block uint64, deleteEmptyObjects bool) (common.Hash, er
 		// Write any contract code associated with the state object
 		if obj.code != nil && obj.dirtyCode {
 			rawdb.WriteCode(codeWriter, common.BytesToHash(obj.CodeHash()), obj.code)
+			// Collect code for pipeline tracing hook before marking as not dirty
+			if s.hooks != nil && s.hooks.OnCommit != nil {
+				hookCodes[common.BytesToHash(obj.CodeHash())] = obj.code
+			}
 			obj.dirtyCode = false
 		}
 		// Write any storage changes in the state object to its storage trie
@@ -1394,6 +1409,18 @@ func (s *StateDB) Commit(block uint64, deleteEmptyObjects bool) (common.Hash, er
 			s.onCommit(set)
 		}
 	}
+
+	// Call pipeline tracing hook
+	if s.hooks != nil && s.hooks.OnCommit != nil {
+		// Build destructs map (address hash -> struct{})
+		destructs := make(map[common.Hash]struct{})
+		for addr := range s.stateObjectsDestruct {
+			destructs[crypto.Keccak256Hash(addr[:])] = struct{}{}
+		}
+
+		s.hooks.OnCommit(origin, root, destructs, s.accounts, s.storages, hookCodes)
+	}
+
 	// Clear all internal flags at the end of commit operation.
 	s.accounts = make(map[common.Hash][]byte)
 	s.storages = make(map[common.Hash]map[common.Hash][]byte)
