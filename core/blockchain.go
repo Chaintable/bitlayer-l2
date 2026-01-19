@@ -51,6 +51,9 @@ import (
 	"github.com/ethereum/go-ethereum/trie"
 	"github.com/ethereum/go-ethereum/trie/triedb/hashdb"
 	"github.com/ethereum/go-ethereum/trie/triedb/pathdb"
+
+	"github.com/ethereum/go-ethereum/core/tracing"
+	ptypes "github.com/ethereum/go-ethereum/debank/types"
 )
 
 var (
@@ -258,6 +261,10 @@ type BlockChain struct {
 	processor  Processor // Block transaction processor interface
 	forker     *ForkChoice
 	vmConfig   vm.Config
+
+	// Pipeline tracing hooks
+	logger vm.EVMLogger
+	hooks  *tracing.Hooks
 }
 
 // NewBlockChain returns a fully initialised block chain using information
@@ -1798,6 +1805,11 @@ func (bc *BlockChain) insertChain(chain types.Blocks, setHead bool) (int, error)
 		statedb.StartPrefetcher("chain")
 		activeState = statedb
 
+		// Set pipeline tracing hooks if available
+		if bc.hooks != nil {
+			statedb.SetHooks(bc.hooks)
+		}
+
 		// If we have a followup block, run that against the current state to pre-cache
 		// transactions and probabilistically some of the account/storage trie nodes.
 		var followupInterrupt atomic.Bool
@@ -2599,4 +2611,113 @@ func (bc *BlockChain) SetTrieFlushInterval(interval time.Duration) {
 // GetTrieFlushInterval gets the in-memory tries flush interval
 func (bc *BlockChain) GetTrieFlushInterval() time.Duration {
 	return time.Duration(bc.flushInterval.Load())
+}
+
+// SetLogger sets the EVM logger and tracing hooks for pipeline tracing.
+func (bc *BlockChain) SetLogger(logger vm.EVMLogger, hooks *tracing.Hooks) {
+	bc.logger = logger
+	bc.hooks = hooks
+	bc.vmConfig.Tracer = logger
+}
+
+// getCommonAncestor finds the common ancestor between two blocks.
+func (bc *BlockChain) getCommonAncestor(blockA, blockB *types.Header) *types.Header {
+	for blockA.Number.Cmp(blockB.Number) > 0 {
+		blockA = bc.GetHeader(blockA.ParentHash, blockA.Number.Uint64()-1)
+		if blockA == nil {
+			return nil
+		}
+	}
+	for blockB.Number.Cmp(blockA.Number) > 0 {
+		blockB = bc.GetHeader(blockB.ParentHash, blockB.Number.Uint64()-1)
+		if blockB == nil {
+			return nil
+		}
+	}
+	for blockA.Hash() != blockB.Hash() {
+		blockA = bc.GetHeader(blockA.ParentHash, blockA.Number.Uint64()-1)
+		blockB = bc.GetHeader(blockB.ParentHash, blockB.Number.Uint64()-1)
+		if blockA == nil || blockB == nil {
+			return nil
+		}
+	}
+	return blockA
+}
+
+// pushBlockChange creates a BlockChangeNotification for normal block or reorg.
+func (bc *BlockChain) pushBlockChange(oldHead, newHead *types.Header) *ptypes.BlockChangeNotification {
+	if oldHead == nil || newHead == nil {
+		return nil
+	}
+
+	// Normal case: new block is child of old block
+	if newHead.ParentHash == oldHead.Hash() {
+		block := bc.GetBlock(newHead.Hash(), newHead.Number.Uint64())
+		if block == nil {
+			return nil
+		}
+		return &ptypes.BlockChangeNotification{
+			ChangeType: 1, // New block
+			NewBlocks: []ptypes.BlockContext{
+				{
+					Hash:        block.Hash(),
+					ParentHash:  block.ParentHash(),
+					BlockNumber: block.NumberU64(),
+					Timestamp:   block.Time(),
+				},
+			},
+		}
+	}
+
+	// Reorg case: find common ancestor
+	commonAncestor := bc.getCommonAncestor(oldHead, newHead)
+	if commonAncestor == nil {
+		return nil
+	}
+
+	// Collect dropped blocks (from old head to common ancestor, exclusive)
+	var dropBlocks []ptypes.BlockContext
+	current := oldHead
+	for current.Hash() != commonAncestor.Hash() {
+		block := bc.GetBlock(current.Hash(), current.Number.Uint64())
+		if block == nil {
+			return nil
+		}
+		dropBlocks = append(dropBlocks, ptypes.BlockContext{
+			Hash:        block.Hash(),
+			ParentHash:  block.ParentHash(),
+			BlockNumber: block.NumberU64(),
+			Timestamp:   block.Time(),
+		})
+		current = bc.GetHeader(current.ParentHash, current.Number.Uint64()-1)
+		if current == nil {
+			return nil
+		}
+	}
+
+	// Collect new blocks (from common ancestor to new head, exclusive of ancestor)
+	var newBlocks []ptypes.BlockContext
+	current = newHead
+	for current.Hash() != commonAncestor.Hash() {
+		block := bc.GetBlock(current.Hash(), current.Number.Uint64())
+		if block == nil {
+			return nil
+		}
+		newBlocks = append([]ptypes.BlockContext{{
+			Hash:        block.Hash(),
+			ParentHash:  block.ParentHash(),
+			BlockNumber: block.NumberU64(),
+			Timestamp:   block.Time(),
+		}}, newBlocks...)
+		current = bc.GetHeader(current.ParentHash, current.Number.Uint64()-1)
+		if current == nil {
+			return nil
+		}
+	}
+
+	return &ptypes.BlockChangeNotification{
+		ChangeType: 2, // Reorg
+		DropBlocks: dropBlocks,
+		NewBlocks:  newBlocks,
+	}
 }

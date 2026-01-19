@@ -1,6 +1,6 @@
 module github.com/ethereum/go-ethereum
 
-go 1.20
+go 1.22
 
 require (
 	github.com/Azure/azure-sdk-for-go/sdk/storage/azblob v1.2.0
@@ -10,6 +10,8 @@ require (
 	github.com/aws/aws-sdk-go-v2/config v1.18.45
 	github.com/aws/aws-sdk-go-v2/credentials v1.13.43
 	github.com/aws/aws-sdk-go-v2/service/route53 v1.30.2
+	github.com/aws/aws-sdk-go-v2/service/s3 v1.40.0
+	github.com/aws/smithy-go v1.15.0
 	github.com/btcsuite/btcd/btcec/v2 v2.2.0
 	github.com/cespare/cp v0.1.0
 	github.com/cloudflare/cloudflare-go v0.79.0
@@ -55,6 +57,7 @@ require (
 	github.com/peterh/liner v1.1.1-0.20190123174540-a2c9a5303de7
 	github.com/protolambda/bls12-381-util v0.0.0-20220416220906-d8552aa452c7
 	github.com/rs/cors v1.7.0
+	github.com/segmentio/kafka-go v0.4.48
 	github.com/shirou/gopsutil v3.21.4-0.20210419000835-c7a38de76ee5+incompatible
 	github.com/status-im/keycard-go v0.2.0
 	github.com/stretchr/testify v1.8.4
@@ -79,15 +82,19 @@ require (
 	github.com/Azure/azure-sdk-for-go/sdk/internal v1.3.0 // indirect
 	github.com/DataDog/zstd v1.4.5 // indirect
 	github.com/StackExchange/wmi v1.2.1 // indirect
+	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.4.13 // indirect
 	github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.13.13 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/configsources v1.1.43 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.4.37 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/ini v1.3.45 // indirect
+	github.com/aws/aws-sdk-go-v2/internal/v4a v1.1.4 // indirect
+	github.com/aws/aws-sdk-go-v2/service/internal/accept-encoding v1.9.14 // indirect
+	github.com/aws/aws-sdk-go-v2/service/internal/checksum v1.1.36 // indirect
 	github.com/aws/aws-sdk-go-v2/service/internal/presigned-url v1.9.37 // indirect
+	github.com/aws/aws-sdk-go-v2/service/internal/s3shared v1.15.4 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sso v1.15.2 // indirect
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.17.3 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sts v1.23.2 // indirect
-	github.com/aws/smithy-go v1.15.0 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/bits-and-blooms/bitset v1.10.0 // indirect
 	github.com/cespare/xxhash/v2 v2.2.0 // indirect
@@ -124,6 +131,7 @@ require (
 	github.com/mmcloughlin/addchain v0.4.0 // indirect
 	github.com/naoina/go-stringutil v0.1.0 // indirect
 	github.com/opentracing/opentracing-go v1.1.0 // indirect
+	github.com/pierrec/lz4/v4 v4.1.15 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/prometheus/client_golang v1.12.0 // indirect
