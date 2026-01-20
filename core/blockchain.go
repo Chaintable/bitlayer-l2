@@ -29,6 +29,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/ethereum/go-ethereum/core/tracing"
+	"github.com/ethereum/go-ethereum/debank/tracer"
+	ptypes "github.com/ethereum/go-ethereum/debank/types"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/lru"
 	"github.com/ethereum/go-ethereum/common/mclock"
@@ -258,6 +262,8 @@ type BlockChain struct {
 	processor  Processor // Block transaction processor interface
 	forker     *ForkChoice
 	vmConfig   vm.Config
+
+	logger *tracing.Hooks
 }
 
 // NewBlockChain returns a fully initialised block chain using information
@@ -423,6 +429,39 @@ func NewBlockChain(db ethdb.Database, cacheConfig *CacheConfig, genesis *Genesis
 					return nil, err
 				}
 				log.Error("Chain rewind was successful, resuming normal operation")
+			}
+		}
+	}
+
+	// Initialize pipeline tracer if configured
+	// TODO(lihe): Verify if bitlayer-l2 requires different tracer initialization
+	if vmConfig.Tracer != nil {
+		if _, ok := vmConfig.Tracer.(*tracer.PipelineTracer); !ok {
+			log.Crit("vmConfig.Tracer must be a pipeline.Tracer")
+		} else {
+			bc.logger = tracing.BuildHooks(vmConfig.Tracer.(*tracer.PipelineTracer))
+		}
+	}
+
+	// Call blockchain init hook if logger is configured
+	if bc.logger != nil && bc.logger.OnBlockchainInit != nil {
+		bc.logger.OnBlockchainInit(chainConfig)
+	}
+
+	// Handle genesis block for tracer if this is the first block
+	// TODO(lihe): Bitlayer-l2 may have different genesis handling, verify this is needed
+	if bc.logger != nil && bc.logger.OnGenesisBlock != nil {
+		if block := bc.CurrentBlock(); block.Number.Uint64() == 0 {
+			alloc, err := getGenesisState(bc.db, block.Hash())
+			if err != nil {
+				return nil, fmt.Errorf("failed to get genesis state: %w", err)
+			}
+			if alloc == nil {
+				// TODO(lihe): Check if bitlayer-l2 requires genesis alloc to be set
+				// Some chains may not have genesis alloc stored
+				log.Warn("Genesis alloc not found, skipping OnGenesisBlock hook")
+			} else {
+				bc.logger.OnGenesisBlock(bc.genesisBlock, coreGenesisToTypesGenesis(alloc))
 			}
 		}
 	}
@@ -1029,6 +1068,12 @@ func (bc *BlockChain) Stop() {
 			}
 		}
 	}
+
+	// Allow tracers to clean-up and release resources.
+	if bc.logger != nil && bc.logger.OnClose != nil {
+		bc.logger.OnClose()
+	}
+
 	// Close the trie database, release all the held resources as the last step.
 	if err := bc.triedb.Close(); err != nil {
 		log.Error("Failed to close trie database", "err", err)
@@ -1381,6 +1426,7 @@ func (bc *BlockChain) writeKnownBlock(block *types.Block) error {
 		}
 	}
 	bc.writeHeadBlock(block)
+	bc.pushBlockChange(block)
 	return nil
 }
 
@@ -1518,6 +1564,7 @@ func (bc *BlockChain) writeBlockAndSetHead(block *types.Block, receipts []*types
 	// Set new head.
 	if status == CanonStatTy {
 		bc.writeHeadBlock(block)
+		bc.pushBlockChange(block)
 	}
 	bc.futureBlocks.Remove(block.Hash())
 
@@ -2246,6 +2293,7 @@ func (bc *BlockChain) reorg(oldHead *types.Header, newHead *types.Block) error {
 	for i := len(newChain) - 1; i >= 1; i-- {
 		// Insert the block in the canonical way, re-writing history
 		bc.writeHeadBlock(newChain[i])
+		bc.pushBlockChange(newChain[i])
 
 		// Collect the new added transactions.
 		for _, tx := range newChain[i].Transactions() {
@@ -2357,6 +2405,7 @@ func (bc *BlockChain) SetCanonical(head *types.Block) (common.Hash, error) {
 		}
 	}
 	bc.writeHeadBlock(head)
+	bc.pushBlockChange(head)
 
 	// Emit events
 	logs := bc.collectLogs(head, false)
@@ -2599,4 +2648,125 @@ func (bc *BlockChain) SetTrieFlushInterval(interval time.Duration) {
 // GetTrieFlushInterval gets the in-memory tries flush interval
 func (bc *BlockChain) GetTrieFlushInterval() time.Duration {
 	return time.Duration(bc.flushInterval.Load())
+}
+
+// getCommonAncestor finds the common ancestor between two blocks and returns
+// the chains that need to be unwound (chainA) and applied (chainB).
+// This is used to detect forks and reorgs for the pipeline tracer.
+// TODO(lihe): Verify this works correctly with bitlayer-l2's consensus mechanism
+func (bc *BlockChain) getCommonAncestor(blocka ptypes.BlockContext, blockb ptypes.BlockContext) (ptypes.BlockContext, []ptypes.BlockContext, []ptypes.BlockContext) {
+	var (
+		chainA, chainB []ptypes.BlockContext
+	)
+	// Fast path: blockb is direct child of blocka
+	if blockb.ParentHash == blocka.Hash {
+		return blocka, chainA, []ptypes.BlockContext{blockb}
+	}
+	// Wind blockb back to same height as blocka
+	for blockb.BlockNumber > blocka.BlockNumber {
+		chainB = append(chainB, blockb)
+		headerb := bc.GetHeaderByHash(blockb.ParentHash)
+		if headerb == nil {
+			log.Crit("Failed to get header by hash", "hash", blockb.ParentHash)
+		} else {
+			blockb = ptypes.BlockContext{
+				BlockNumber: headerb.Number.Uint64(),
+				Hash:        headerb.Hash(),
+				ParentHash:  headerb.ParentHash,
+				Timestamp:   headerb.Time,
+			}
+		}
+	}
+	// Now wind both chains back until we find common ancestor
+	for blocka.Hash != blockb.Hash {
+		chainA = append(chainA, blocka)
+		headera := bc.GetHeaderByHash(blocka.ParentHash)
+		if headera == nil {
+			log.Crit("Failed to get header by hash", "hash", blocka.ParentHash)
+		} else {
+			blocka = ptypes.BlockContext{
+				BlockNumber: headera.Number.Uint64(),
+				Hash:        headera.Hash(),
+				ParentHash:  headera.ParentHash,
+				Timestamp:   headera.Time,
+			}
+		}
+
+		chainB = append(chainB, blockb)
+		headerb := bc.GetHeaderByHash(blockb.ParentHash)
+		if headerb == nil {
+			log.Crit("Failed to get header by hash", "hash", blockb.ParentHash)
+		} else {
+			blockb = ptypes.BlockContext{
+				BlockNumber: headerb.Number.Uint64(),
+				Hash:        headerb.Hash(),
+				ParentHash:  headerb.ParentHash,
+				Timestamp:   headerb.Time,
+			}
+		}
+	}
+	// Reverse chainB to get correct order (oldest to newest)
+	slices.Reverse(chainB)
+	return blocka, chainA, chainB
+}
+
+// pushBlockChange sends block change notifications to Kafka via NodeXPusher.
+// This enables the debank union nodes to track canonical chain changes and reorgs.
+// TODO(lihe): Verify Kafka integration works with bitlayer-l2's architecture
+func (bc *BlockChain) pushBlockChange(block *types.Block) {
+	// Early return if pipeline tracer not configured
+	if tracer.NodeXPusher == nil {
+		return
+	}
+
+	// Only push if the new block is newer than the last pushed block
+	// If last pushed block is newer, we're in an unwind/reorg that will be handled later
+	if tracer.NodeXPusher.LastPushedBlock().BlockNumber > block.NumberU64() {
+		return
+	}
+
+	lastPushBlock := tracer.NodeXPusher.LastPushedBlock()
+	_, dropBlocks, newBlocks := bc.getCommonAncestor(*lastPushBlock, ptypes.BlockContext{
+		BlockNumber: block.NumberU64(),
+		Hash:        block.Hash(),
+		ParentHash:  block.ParentHash(),
+		Timestamp:   block.Time(),
+	})
+
+	var blockChange *ptypes.BlockChangeNotification
+	if len(dropBlocks) > 0 {
+		// This is a reorg - both old and new blocks
+		blockChange = &ptypes.BlockChangeNotification{
+			ChangeType: 2, // Reorg
+			NewBlocks:  newBlocks,
+			DropBlocks: dropBlocks,
+		}
+	} else if len(newBlocks) > 0 {
+		// Normal extension of the chain
+		blockChange = &ptypes.BlockChangeNotification{
+			ChangeType: 1, // New blocks
+			NewBlocks:  newBlocks,
+		}
+	}
+
+	// Handle empty blocks (no state changes)
+	// TODO(lihe): Verify bitlayer-l2's behavior with empty blocks
+	parent := bc.GetHeaderByHash(block.Header().ParentHash)
+	if parent != nil && parent.Root == block.Root() {
+		// Empty block - just call OnCommit hook without state changes
+		// Note: bitlayer-l2 uses 6-parameter OnCommit (no sharePrice)
+		if bc.logger != nil && bc.logger.OnCommit != nil {
+			bc.logger.OnCommit(parent.Root, block.Root(), nil, nil, nil, nil)
+		}
+	}
+
+	log.Info("NodeXPusher PushBlockChangeNotification", "blockChange", blockChange, "newBlocks", len(newBlocks), "dropBlocks", len(dropBlocks), "blockHash", block.Hash().Hex(), "parentHash", block.ParentHash().Hex())
+
+	if blockChange != nil {
+		err := tracer.NodeXPusher.PushBlockChangeNotification(blockChange)
+		if err != nil {
+			log.Error("SetCanonical PushBlockChangeNotification error", "err", err)
+		}
+		log.Info("NodeXPusher PushBlockChangeNotification sent", "blockChange", blockChange)
+	}
 }

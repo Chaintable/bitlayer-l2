@@ -28,6 +28,7 @@ import (
 	"github.com/ethereum/go-ethereum/common/gopool"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/state/snapshot"
+	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/log"
@@ -141,6 +142,14 @@ type StateDB struct {
 
 	// Testing hooks
 	onCommit func(states *triestate.Set) // Hook invoked when commit is performed
+
+	// Pipeline tracing support - tracks state changes for external tracers
+	// Bitlayer-specific: These fields mirror blast-geth's tracing infrastructure
+	// but are adapted for bitlayer's consensus and state management.
+	hooks     *tracing.Hooks                         // Tracing hooks for pipeline integration
+	Destructs map[common.Hash]struct{}               // Tracks destructed accounts (by address hash)
+	Accounts  map[common.Hash][]byte                 // Tracks created/modified accounts (address hash -> slim RLP)
+	Storage   map[common.Hash]map[common.Hash][]byte // Tracks storage changes (address hash -> slot hash -> value)
 }
 
 // New creates a new state from a given trie.
@@ -168,6 +177,10 @@ func New(root common.Hash, db Database, snaps *snapshot.Tree) (*StateDB, error) 
 		accessList:           newAccessList(),
 		transientStorage:     newTransientStorage(),
 		hasher:               crypto.NewKeccakState(),
+		// Initialize pipeline tracing maps
+		Destructs: make(map[common.Hash]struct{}),
+		Accounts:  make(map[common.Hash][]byte),
+		Storage:   make(map[common.Hash]map[common.Hash][]byte),
 	}
 	if sdb.snaps != nil {
 		sdb.snap = sdb.snaps.Snapshot(root)
@@ -217,6 +230,12 @@ func (s *StateDB) AddLog(log *types.Log) {
 	log.Index = s.logSize
 	s.logs[s.thash] = append(s.logs[s.thash], log)
 	s.logSize++
+
+	// Pipeline tracing: notify hooks when a log is emitted
+	// Bitlayer-specific: This allows external tracers to capture log events
+	if s.hooks != nil && s.hooks.OnLog != nil {
+		s.hooks.OnLog(log)
+	}
 }
 
 // GetLogs returns the logs matching the specified transaction hash, and annotates
@@ -549,6 +568,10 @@ func (s *StateDB) updateStateObject(obj *stateObject) {
 		}
 	}
 
+	// Pipeline tracing: track account changes for external tracers
+	// Bitlayer-specific: Updates tracking map with slim account RLP encoding
+	s.Accounts[obj.addrHash] = obj.slimAccountRLP
+
 	// clear rlp result
 	obj.accountRLP, obj.slimAccountRLP, obj.rlpErr = nil, nil, nil
 }
@@ -564,6 +587,10 @@ func (s *StateDB) deleteStateObject(obj *stateObject) {
 	if err := s.trie.DeleteAccount(addr); err != nil {
 		s.setError(fmt.Errorf("deleteStateObject (%x) error: %v", addr[:], err))
 	}
+
+	// Pipeline tracing: track account deletion for external tracers
+	// Bitlayer-specific: Mark account as destructed in tracking map
+	s.Destructs[obj.addrHash] = struct{}{}
 }
 
 // getStateObject retrieves a state object given by the address, returning nil if
@@ -721,11 +748,18 @@ func (s *StateDB) createObject(addr common.Address) (newobj, prev *stateObject) 
 	if prev == nil {
 		s.journal.append(createObjectChange{account: &addr})
 	} else {
+		// Pipeline tracing: track deleted/recreated accounts
+		// Bitlayer-specific: When an account is recreated, mark the previous one as destructed
+		_, prevdestruct := s.Destructs[prev.addrHash]
+		if !prevdestruct {
+			s.Destructs[prev.addrHash] = struct{}{}
+		}
+
 		// The original account should be marked as destructed and all cached
 		// account and storage data should be cleared as well. Note, it must
 		// be done here, otherwise the destruction event of "original account"
 		// will be lost.
-		_, prevdestruct := s.stateObjectsDestruct[prev.address]
+		_, prevdestruct = s.stateObjectsDestruct[prev.address]
 		if !prevdestruct {
 			s.stateObjectsDestruct[prev.address] = prev.origin
 		}
@@ -801,6 +835,10 @@ func (s *StateDB) Copy() *StateDB {
 		// miner to operate trie-backed only.
 		snaps: s.snaps,
 		snap:  s.snap,
+
+		// Pipeline tracing: copy hooks reference (shared across copies)
+		// Bitlayer-specific: Hooks are shared, but tracking maps are deep-copied
+		hooks: s.hooks,
 	}
 	// Copy the dirty states, logs, and preimages
 	for addr := range s.journal.dirties {
@@ -873,6 +911,27 @@ func (s *StateDB) Copy() *StateDB {
 	if s.prefetcher != nil {
 		state.prefetcher = s.prefetcher.copy()
 	}
+
+	// Pipeline tracing: deep-copy tracking maps
+	// Bitlayer-specific: These maps track state changes for external tracers
+	// and must be properly copied to maintain consistency across state copies
+	state.Destructs = make(map[common.Hash]struct{})
+	for k, v := range s.Destructs {
+		state.Destructs[k] = v
+	}
+	state.Accounts = make(map[common.Hash][]byte)
+	for k, v := range s.Accounts {
+		state.Accounts[k] = common.CopyBytes(v)
+	}
+	state.Storage = make(map[common.Hash]map[common.Hash][]byte)
+	for k, v := range s.Storage {
+		innerMap := make(map[common.Hash][]byte)
+		for kk, vv := range v {
+			innerMap[kk] = common.CopyBytes(vv)
+		}
+		state.Storage[k] = innerMap
+	}
+
 	return state
 }
 
@@ -937,6 +996,12 @@ func (s *StateDB) Finalise(deleteEmptyObjects bool) {
 			delete(s.storages, obj.addrHash)      // Clear out any previously updated storage data (may be recreated via a resurrect)
 			delete(s.accountsOrigin, obj.address) // Clear out any previously updated account data (may be recreated via a resurrect)
 			delete(s.storagesOrigin, obj.address) // Clear out any previously updated storage data (may be recreated via a resurrect)
+
+			// Pipeline tracing: update tracking maps when finalizing deleted accounts
+			// Bitlayer-specific: Mark as destructed and clear from tracking maps
+			s.Destructs[obj.addrHash] = struct{}{}
+			delete(s.Accounts, obj.addrHash)
+			delete(s.Storage, obj.addrHash)
 		} else {
 			obj.finalise(true) // Prefetch slots in the background
 		}
@@ -1268,6 +1333,13 @@ func (s *StateDB) handleDestruction(nodes *trienode.MergedNodeSet) (map[common.A
 // The associated block number of the state transition is also provided
 // for more chain context.
 func (s *StateDB) Commit(block uint64, deleteEmptyObjects bool) (common.Hash, error) {
+	// Pipeline tracing: save original root before commit for hooks
+	// Bitlayer-specific: OnCommit hook needs both original and new root
+	originalRoot := s.originalRoot
+	if originalRoot == (common.Hash{}) {
+		originalRoot = types.EmptyRootHash
+	}
+
 	// Short circuit in case any database failure occurred earlier.
 	if s.dbErr != nil {
 		return common.Hash{}, fmt.Errorf("commit aborted due to earlier error: %v", s.dbErr)
@@ -1289,6 +1361,9 @@ func (s *StateDB) Commit(block uint64, deleteEmptyObjects bool) (common.Hash, er
 	if err != nil {
 		return common.Hash{}, err
 	}
+	// Pipeline tracing: collect contract codes for OnCommit hook
+	// Bitlayer-specific: Track code changes for external tracers
+	codes := make(map[common.Hash][]byte)
 	// Handle all state updates afterwards
 	for addr := range s.stateObjectsDirty {
 		obj := s.stateObjects[addr]
@@ -1298,6 +1373,8 @@ func (s *StateDB) Commit(block uint64, deleteEmptyObjects bool) (common.Hash, er
 		// Write any contract code associated with the state object
 		if obj.code != nil && obj.dirtyCode {
 			rawdb.WriteCode(codeWriter, common.BytesToHash(obj.CodeHash()), obj.code)
+			// Pipeline tracing: collect code for hooks
+			codes[common.BytesToHash(obj.CodeHash())] = obj.code
 			obj.dirtyCode = false
 		}
 		// Write any storage changes in the state object to its storage trie
@@ -1394,6 +1471,13 @@ func (s *StateDB) Commit(block uint64, deleteEmptyObjects bool) (common.Hash, er
 			s.onCommit(set)
 		}
 	}
+	// Pipeline tracing: call OnCommit hook before clearing internal state
+	// Bitlayer-specific: Uses standard 6-parameter signature (no sharePrice like Blast)
+	// This allows external tracers to process all state changes before cleanup
+	if s.hooks != nil && s.hooks.OnCommit != nil {
+		s.hooks.OnCommit(originalRoot, root, s.Destructs, s.Accounts, s.Storage, codes)
+	}
+
 	// Clear all internal flags at the end of commit operation.
 	s.accounts = make(map[common.Hash][]byte)
 	s.storages = make(map[common.Hash]map[common.Hash][]byte)
@@ -1401,6 +1485,13 @@ func (s *StateDB) Commit(block uint64, deleteEmptyObjects bool) (common.Hash, er
 	s.storagesOrigin = make(map[common.Address]map[common.Hash][]byte)
 	s.stateObjectsDirty = make(map[common.Address]struct{})
 	s.stateObjectsDestruct = make(map[common.Address]*types.StateAccount)
+
+	// Pipeline tracing: clear tracking maps after commit
+	// Bitlayer-specific: Reset tracking state for next block
+	s.Destructs = make(map[common.Hash]struct{})
+	s.Accounts = make(map[common.Hash][]byte)
+	s.Storage = make(map[common.Hash]map[common.Hash][]byte)
+
 	return root, nil
 }
 
@@ -1492,6 +1583,13 @@ func (s *StateDB) convertAccountSet(set map[common.Address]*types.StateAccount) 
 		}
 	}
 	return ret
+}
+
+// SetHooks sets the tracing hooks for pipeline integration.
+// Bitlayer-specific: This allows external tracers to hook into state changes
+// for monitoring, analytics, and debugging purposes.
+func (s *StateDB) SetHooks(hooks *tracing.Hooks) {
+	s.hooks = hooks
 }
 
 // copySet returns a deep-copied set.

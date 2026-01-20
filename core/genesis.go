@@ -38,6 +38,8 @@ import (
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/trie"
+
+	ptypes "github.com/ethereum/go-ethereum/debank/types"
 	"github.com/ethereum/go-ethereum/trie/triedb/pathdb"
 )
 
@@ -949,4 +951,34 @@ func decodePreallocOld(data string) GenesisAlloc {
 		ga[common.BigToAddress(account.Addr)] = acc
 	}
 	return ga
+}
+
+// getGenesisState retrieves the genesis allocation from the database
+// TODO(lihe): Verify this works with bitlayer-l2's genesis storage format
+func getGenesisState(db ethdb.Database, blockhash common.Hash) (alloc GenesisAlloc, err error) {
+	blob := rawdb.ReadGenesisStateSpec(db, blockhash)
+	if len(blob) != 0 {
+		if err := alloc.UnmarshalJSON(blob); err != nil {
+			return nil, err
+		}
+		return alloc, nil
+	}
+	return nil, nil
+}
+
+// coreGenesisToTypesGenesis converts core.GenesisAlloc to types.GenesisAlloc
+// This is needed because the pipeline tracer expects types.GenesisAlloc
+// TODO(lihe): Verify types.Account structure matches bitlayer-l2's requirements
+// coreGenesisToTypesGenesis converts core.GenesisAlloc to ptypes.GenesisAlloc
+func coreGenesisToTypesGenesis(alloc GenesisAlloc) ptypes.GenesisAlloc {
+	genesis := make(ptypes.GenesisAlloc)
+	for address, account := range alloc {
+		genesis[address] = ptypes.GenesisAccount{
+			Code:    account.Code,
+			Storage: account.Storage,
+			Balance: account.Balance,
+			Nonce:   account.Nonce,
+		}
+	}
+	return genesis
 }
