@@ -98,7 +98,7 @@ networks:
 
 services:
   bitlayer-l2:
-    image: 294354037686.dkr.ecr.ap-northeast-1.amazonaws.com/blockchain-bitlayer-l2-x:amd64-latest
+    image: 294354037686.dkr.ecr.ap-northeast-1.amazonaws.com/blockchain/bitlayer-l2-x:amd64-latest
     ports:
       - 8545:8545  # HTTP RPC
       - 8546:8546  # WebSocket RPC

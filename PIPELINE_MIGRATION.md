@@ -183,7 +183,7 @@ Calls to `pushBlockChange()`:
 **New File**: `.github/workflows/build.debank.yml`
 - Triggers on PRs to `debank` branch or manual dispatch
 - Builds and pushes to AWS ECR
-- Image name: `blockchain-bitlayer-l2-x`
+- Image name: `blockchain/bitlayer-l2-x`
 - Supports amd64 architecture
 
 **New File**: `.github/workflows/release.debank.yml`
@@ -272,7 +272,7 @@ receipt.EffectiveGasPrice = tx.EffectiveGasPrice(baseFee)
 The following items are marked with `TODO(lihe)` comments in the code:
 
 ### Workflows
-1. ✅ **Image naming**: Updated to `blockchain-bitlayer-l2-x`
+1. ✅ **Image naming**: Updated to `blockchain/bitlayer-l2-x`
 2. ✅ **Architecture support**: Confirmed amd64 only (no arm64 needed)
 
 ### Core Integration
