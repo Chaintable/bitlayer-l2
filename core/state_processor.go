@@ -27,9 +27,12 @@ import (
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/consensus/misc"
 	"github.com/ethereum/go-ethereum/core/state"
+	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/debank/tracer"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
 )
 
@@ -71,9 +74,27 @@ func CreatingBloomParallel(wg *sync.WaitGroup) ModifyProcessOptionFunc {
 // Process returns the receipts and logs accumulated during the process and
 // returns the amount of gas that was used in the process. If any of the
 // transactions failed to execute due to insufficient gas it will return an error.
-func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg vm.Config) (types.Receipts, []*types.Log, types.InternalTxs, uint64, error) {
+func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg vm.Config) (receipts types.Receipts, logs []*types.Log, internalTxs types.InternalTxs, gasUsed uint64, err error) {
+	// Check if cfg.Tracer is a PipelineTracer and set up tracing hooks
+	var pipelineTracer *tracer.PipelineTracer
+	if cfg.Tracer != nil {
+		if p, ok := cfg.Tracer.(*tracer.PipelineTracer); !ok {
+			log.Crit("vmConfig.Tracer must be a pipeline.Tracer")
+		} else {
+			pipelineTracer = p
+		}
+	}
+	if pipelineTracer != nil {
+		pipelineTracer.OnBlockStart(block)
+		statedb.SetHooks(tracing.BuildHooks(pipelineTracer))
+	}
+	defer func() {
+		if pipelineTracer != nil {
+			pipelineTracer.OnBlockEnd(err)
+		}
+	}()
+
 	var (
-		receipts    types.Receipts
 		usedGas     = new(uint64)
 		header      = block.Header()
 		blockHash   = block.Hash()
@@ -81,7 +102,6 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 		allLogs     []*types.Log
 		gp          = new(GasPool).AddGas(block.GasLimit())
 		tracer      *vm.ActionLogger
-		internalTxs types.InternalTxs
 	)
 	// Mutate the block and state according to any hard-fork specs
 	if p.config.DAOForkSupport && p.config.DAOForkBlock != nil && p.config.DAOForkBlock.Cmp(block.Number()) == 0 {
@@ -121,10 +141,32 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 		}
 
 		statedb.SetTxContext(tx.Hash(), i)
+
+		// Call OnTxStart hook before processing transaction
+		if pipelineTracer != nil {
+			pipelineTracer.OnTxStart(tx, msg.From)
+		}
+
 		receipt, err := applyTransaction(msg, p.config, gp, statedb, blockNumber, blockHash, tx, usedGas, vmenv, CreatingBloomParallel(&bloomWg))
 		if err != nil {
 			return nil, nil, nil, 0, fmt.Errorf("could not apply tx %d [%v]: %w", i, tx.Hash().Hex(), err)
 		}
+
+		// Set EffectiveGasPrice on receipt for tracing
+		// TODO(lihe): FIXED - Changed from EffectiveGasTipValue to EffectiveGasPrice
+		// Background:
+		//   - Blast implementation uses EffectiveGasTipValue (only tip, missing baseFee)
+		//   - chaintable-go-ethereum uses effectiveGasPrice (tip + baseFee) - CORRECT
+		//   - For EIP-1559 txs: EffectiveGasPrice = min(gasTipCap, gasFeeCap-baseFee) + baseFee
+		//   - Blast's implementation is incorrect but may have adapted downstream
+		//   - bitlayer-l2 should use correct calculation for accurate gas price data
+		// Risk: If downstream pipeline expects Blast's incorrect format, this may cause issues
+		// Mitigation: Monitor pipeline data after deployment, compare with expected values
+		if pipelineTracer != nil {
+			receipt.EffectiveGasPrice = tx.EffectiveGasPrice(header.BaseFee)
+			pipelineTracer.OnTxEnd(receipt, err)
+		}
+
 		receipts = append(receipts, receipt)
 		allLogs = append(allLogs, receipt.Logs...)
 
@@ -169,8 +211,9 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 	returnErrBeforeWaitGroup = false
 
 	// Finalize the block, applying any consensus engine specific extras (e.g. block rewards)
-	if err := p.engine.Finalize(p.bc, header, statedb, block.Transactions(), block.Uncles(), withdrawals); err != nil {
-		return nil, nil, nil, 0, err
+	// TODO(lihe): Check if bitlayer-l2's engine.Finalize has any special requirements
+	if err = p.engine.Finalize(p.bc, header, statedb, block.Transactions(), block.Uncles(), withdrawals); err != nil {
+		return receipts, allLogs, internalTxs, *usedGas, err
 	}
 	return receipts, allLogs, internalTxs, *usedGas, nil
 }

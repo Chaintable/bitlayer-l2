@@ -169,6 +169,10 @@ type Config struct {
 	TraceAction int `toml:",omitempty"`
 
 	TraceFilterCount uint64 `toml:",omitempty"`
+
+	// Pipeline tracer configuration (JSON string)
+	// Example: {"region":"us-east-1","node_x_bucket":"bucket-name",...}
+	VMTraceCfg string
 }
 
 // CreateConsensusEngine creates a consensus engine for the given chain config.

@@ -309,8 +309,9 @@ func (s *stateObject) updateTrieConcurrencySafe() (Trie, error) {
 
 	// The snapshot storage map for the object
 	var (
-		storage map[common.Hash][]byte
-		origin  map[common.Hash][]byte
+		storage     map[common.Hash][]byte
+		origin      map[common.Hash][]byte
+		flatstorage map[common.Hash][]byte // For pipeline tracer state tracking
 	)
 	tr, err := s.getTrie()
 
@@ -371,6 +372,21 @@ func (s *stateObject) updateTrieConcurrencySafe() (Trie, error) {
 				origin[khash] = b
 			}
 		}
+
+		// Pipeline tracer: Track storage changes for OnCommit hook
+		// This allows external tracers to receive complete storage state diffs
+		// Note: Fixed blast-geth bug where s.db.Storage[s.addrHash] was assigned 'storage' instead of 'flatstorage'
+		{
+			if flatstorage == nil {
+				// Retrieve the storage map for this account, create if not exists
+				if flatstorage = s.db.Storage[s.addrHash]; flatstorage == nil {
+					flatstorage = make(map[common.Hash][]byte)
+					s.db.Storage[s.addrHash] = flatstorage // FIXED: was 'storage' in blast-geth
+				}
+			}
+			flatstorage[khash] = encoded // encoded will be nil if deleted
+		}
+
 		// Cache the items for preloading
 		usedStorage = append(usedStorage, common.CopyBytes(key[:])) // Copy needed for closure
 	}

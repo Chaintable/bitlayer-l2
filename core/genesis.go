@@ -38,6 +38,8 @@ import (
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/trie"
+
+	ptypes "github.com/ethereum/go-ethereum/debank/types"
 	"github.com/ethereum/go-ethereum/trie/triedb/pathdb"
 )
 
@@ -673,6 +675,12 @@ func (g *Genesis) Commit(db ethdb.Database, triedb *trie.Database) (*types.Block
 	if config.Clique != nil && len(block.Extra()) < 32+crypto.SignatureLength {
 		return nil, errors.New("can't start clique chain without signers")
 	}
+	// Marshal the genesis allocation for persistence
+	// This allows retrieving the original genesis state later via getGenesisState()
+	blob, err := json.Marshal(g.Alloc)
+	if err != nil {
+		return nil, err
+	}
 	// All the checks has passed, flush the states derived from the genesis
 	// specification as well as the specification itself into the provided
 	// database.
@@ -689,6 +697,9 @@ func (g *Genesis) Commit(db ethdb.Database, triedb *trie.Database) (*types.Block
 	rawdb.WriteHeadFastBlockHash(db, block.Hash())
 	rawdb.WriteHeadHeaderHash(db, block.Hash())
 	rawdb.WriteChainConfig(db, block.Hash(), config)
+	// Persist the genesis state specification for later retrieval by tracer
+	// Required for OnGenesisBlock hook to get the full allocation
+	rawdb.WriteGenesisStateSpec(db, block.Hash(), blob)
 	return block, nil
 }
 
@@ -949,4 +960,33 @@ func decodePreallocOld(data string) GenesisAlloc {
 		ga[common.BigToAddress(account.Addr)] = acc
 	}
 	return ga
+}
+
+// getGenesisState retrieves the genesis allocation from the database
+// Verified: Uses standard ReadGenesisStateSpec API, compatible with bitlayer-l2
+func getGenesisState(db ethdb.Database, blockhash common.Hash) (alloc GenesisAlloc, err error) {
+	blob := rawdb.ReadGenesisStateSpec(db, blockhash)
+	if len(blob) != 0 {
+		if err := alloc.UnmarshalJSON(blob); err != nil {
+			return nil, err
+		}
+		return alloc, nil
+	}
+	return nil, nil
+}
+
+// coreGenesisToTypesGenesis converts core.GenesisAlloc to ptypes.GenesisAlloc
+// Verified: bitlayer-l2 uses standard StateAccount (Nonce, Balance, Root, CodeHash)
+// No special fields like Blast's Shares/Flags/Remainder/Fixed
+func coreGenesisToTypesGenesis(alloc GenesisAlloc) ptypes.GenesisAlloc {
+	genesis := make(ptypes.GenesisAlloc)
+	for address, account := range alloc {
+		genesis[address] = ptypes.GenesisAccount{
+			Code:    account.Code,
+			Storage: account.Storage,
+			Balance: account.Balance,
+			Nonce:   account.Nonce,
+		}
+	}
+	return genesis
 }
