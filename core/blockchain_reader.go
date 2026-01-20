@@ -366,8 +366,15 @@ func (bc *BlockChain) Genesis() *types.Block {
 }
 
 // GetVMConfig returns the block chain VM config.
+// Note: Returns a copy with Tracer set to nil to prevent:
+// 1. Tracer being shared across multiple goroutines (not thread-safe)
+// 2. RPC calls incorrectly triggering tracer callbacks
+// 3. Memory leaks from tracer holding large state
+// The PipelineTracer should only be used during block processing, not RPC calls
 func (bc *BlockChain) GetVMConfig() *vm.Config {
-	return &bc.vmConfig
+	b := bc.vmConfig
+	b.Tracer = nil // We don't want to leak the tracer
+	return &b
 }
 
 // SetTxLookupLimit is responsible for updating the txlookup limit to the

@@ -420,6 +420,17 @@ func (c *codeAndHash) Hash() common.Hash {
 
 // create creates a new contract using code as deployment code.
 func (evm *EVM) create(caller ContractRef, codeAndHash *codeAndHash, gas uint64, value *big.Int, address common.Address, typ OpCode) ([]byte, common.Address, uint64, error) {
+	// Pipeline tracer: Capture the trace at the very beginning of CREATE operation
+	// This ensures complete execution path tracking including early failures
+	// Note: Moved earlier than original position (after NewContract) to align with blast-geth
+	if evm.Config.Tracer != nil {
+		if evm.depth == 0 {
+			evm.Config.Tracer.CaptureStart(evm, caller.Address(), address, true, codeAndHash.code, gas, value)
+		} else {
+			evm.Config.Tracer.CaptureEnter(typ, caller.Address(), address, codeAndHash.code, gas, value)
+		}
+	}
+
 	// Depth check execution. Fail if we're trying to execute above the
 	// limit.
 	if evm.depth > int(params.CallCreateDepth) {
@@ -455,14 +466,6 @@ func (evm *EVM) create(caller ContractRef, codeAndHash *codeAndHash, gas uint64,
 	// The contract is a scoped environment for this execution context only.
 	contract := NewContract(caller, AccountRef(address), value, gas)
 	contract.SetCodeOptionalHash(&address, codeAndHash)
-
-	if evm.Config.Tracer != nil {
-		if evm.depth == 0 {
-			evm.Config.Tracer.CaptureStart(evm, caller.Address(), address, true, codeAndHash.code, gas, value)
-		} else {
-			evm.Config.Tracer.CaptureEnter(typ, caller.Address(), address, codeAndHash.code, gas, value)
-		}
-	}
 
 	ret, err := evm.interpreter.Run(contract, nil, false)
 

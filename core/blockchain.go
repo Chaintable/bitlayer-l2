@@ -1426,7 +1426,14 @@ func (bc *BlockChain) writeKnownBlock(block *types.Block) error {
 		}
 	}
 	bc.writeHeadBlock(block)
-	bc.pushBlockChange(block)
+	// Note: pushBlockChange is intentionally commented out here to avoid duplicate notifications
+	// writeKnownBlock is called during snap sync recovery and rollback scenarios where blocks
+	// have already been pushed to Kafka during their initial import. Re-pushing them would:
+	// 1. Create duplicate block notifications for downstream consumers
+	// 2. Cause out-of-order events during non-linear snap sync recovery
+	// 3. Push blocks without actual trace data (no state execution in writeKnownBlock)
+	// Reference: blast-geth commit c91c4c5 "fix: remove writeKnownBlock pushBlockChange"
+	//bc.pushBlockChange(block)
 	return nil
 }
 

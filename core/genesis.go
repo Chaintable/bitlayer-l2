@@ -675,6 +675,12 @@ func (g *Genesis) Commit(db ethdb.Database, triedb *trie.Database) (*types.Block
 	if config.Clique != nil && len(block.Extra()) < 32+crypto.SignatureLength {
 		return nil, errors.New("can't start clique chain without signers")
 	}
+	// Marshal the genesis allocation for persistence
+	// This allows retrieving the original genesis state later via getGenesisState()
+	blob, err := json.Marshal(g.Alloc)
+	if err != nil {
+		return nil, err
+	}
 	// All the checks has passed, flush the states derived from the genesis
 	// specification as well as the specification itself into the provided
 	// database.
@@ -691,6 +697,9 @@ func (g *Genesis) Commit(db ethdb.Database, triedb *trie.Database) (*types.Block
 	rawdb.WriteHeadFastBlockHash(db, block.Hash())
 	rawdb.WriteHeadHeaderHash(db, block.Hash())
 	rawdb.WriteChainConfig(db, block.Hash(), config)
+	// Persist the genesis state specification for later retrieval by tracer
+	// Required for OnGenesisBlock hook to get the full allocation
+	rawdb.WriteGenesisStateSpec(db, block.Hash(), blob)
 	return block, nil
 }
 
