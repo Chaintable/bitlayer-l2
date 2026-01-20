@@ -157,7 +157,7 @@ Calls to `pushBlockChange()`:
 **New File**: `.github/workflows/build.debank.yml`
 - Triggers on PRs to `debank` branch or manual dispatch
 - Builds and pushes to AWS ECR
-- Image name: `blockchain-bitlayer-gethx` (TODO: verify)
+- Image name: `blockchain-bitlayer-l2-x`
 - Supports amd64 architecture
 
 **New File**: `.github/workflows/release.debank.yml`
@@ -165,6 +165,7 @@ Calls to `pushBlockChange()`:
 - Same build/push process as build workflow
 - Includes Lark notification on success
 - Commented-out multi-arch manifest merge
+- Fixed: Removed invalid pull_request context reference
 
 ## Key Differences from Blast Implementation
 
@@ -222,7 +223,7 @@ func getAccountBalance(account *types.StateAccount) *big.Int {
 The following items are marked with `TODO(lihe)` comments in the code:
 
 ### Workflows
-1. **Image naming**: Verify `blockchain-bitlayer-gethx` is correct ECR image name
+1. ✅ **Image naming**: Updated to `blockchain-bitlayer-l2-x`
 2. **Architecture support**: Determine if arm64 builds are needed
 
 ### Core Integration
