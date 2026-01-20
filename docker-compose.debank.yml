@@ -1,0 +1,48 @@
+version: '3.8'
+
+networks:
+  bitlayer-network:
+    ipam:
+      driver: default
+      config:
+        - subnet: 10.0.200.0/24
+
+services:
+  bitlayer-l2:
+    networks:
+      - bitlayer-network
+    container_name: bitlayer-l2-pipeline
+    restart: unless-stopped
+    stop_signal: SIGINT
+    stop_grace_period: 60s
+
+    build:
+      context: .
+      dockerfile: Dockerfile.debank
+
+    ports:
+      - 8555:8545
+      - 8556:8546
+      - 31031:31031/udp
+      - 31031:31031/tcp
+
+    volumes:
+      - ${DATA_DIR:-/data/bitlayer-l2}:/var/data
+      - ${CONFIG_FILE:-./config.toml}:/etc/bitlayer-l2/config.toml
+
+    entrypoint:
+      - /usr/local/bin/geth
+      - --config=/etc/bitlayer-l2/config.toml
+      - --datadir=/var/data
+      - --ipcpath=/var/data/geth.ipc
+      - --syncmode=full
+      - --cache=4096
+      - --gcmode=archive
+      - --history.transactions=0
+      - --rpc.allow-unprotected-txs
+      - --metrics
+      - --pprof
+      - --pprof.addr=0.0.0.0
+      - --pprof.port=9260
+      - --vmtrace=pipeline
+      - --vmtrace.jsonconfig={"node_x_bucket":"${NODE_X_BUCKET}","chain_table_bucket":"${CHAIN_TABLE_BUCKET}","region":"${AWS_REGION:-ap-northeast-1}","brokers":${KAFKA_BROKERS},"topic":"${KAFKA_TOPIC}","chain_id":"${CHAIN_ID}","s3_temp_dir":"/var/data/s3_tmp","is_backup":${IS_BACKUP:-false},"version":"${VERSION}"}

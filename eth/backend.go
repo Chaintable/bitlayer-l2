@@ -18,6 +18,7 @@
 package eth
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math/big"
@@ -41,6 +42,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/txpool/legacypool"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
+	"github.com/ethereum/go-ethereum/debank/tracer"
 	"github.com/ethereum/go-ethereum/eth/downloader"
 	"github.com/ethereum/go-ethereum/eth/ethconfig"
 	"github.com/ethereum/go-ethereum/eth/gasprice"
@@ -208,6 +210,16 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 			StateScheme:         scheme,
 		}
 	)
+
+	// Initialize pipeline tracer if configured
+	log.Info("vmtrace config", "config", config.VMTraceCfg)
+	if len(config.VMTraceCfg) != 0 {
+		t, err := tracer.NewPipelineTracer(json.RawMessage(config.VMTraceCfg))
+		if err != nil {
+			return nil, fmt.Errorf("failed to create tracer %s: %v", config.VMTraceCfg, err)
+		}
+		vmConfig.Tracer = t
+	}
 	// Override the chain config with provided settings.
 	var overrides core.ChainOverrides
 	if config.OverrideHalving != nil {

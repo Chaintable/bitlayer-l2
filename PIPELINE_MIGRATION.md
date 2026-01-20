@@ -95,7 +95,33 @@ Modified methods:
 
 **Key Adaptation**: Bitlayer uses standard Ethereum account structure without Blast's yield-related fields (Shares, Flags, Remainder, Fixed).
 
-### 5. Blockchain Integration
+### 5. Pipeline Tracer Configuration
+
+**File**: `eth/ethconfig/config.go`
+
+Added field to Config struct:
+- `VMTraceCfg string` - Pipeline tracer configuration (JSON string)
+
+**File**: `eth/backend.go`
+
+Additions:
+- Imports: `encoding/json`, `debank/tracer`
+- Initialize PipelineTracer from `config.VMTraceCfg` JSON string before blockchain creation
+- Set `vmConfig.Tracer` to pass tracer to blockchain
+
+```go
+// Initialize pipeline tracer if configured
+log.Info("vmtrace config", "config", config.VMTraceCfg)
+if len(config.VMTraceCfg) != 0 {
+    t, err := tracer.NewPipelineTracer(json.RawMessage(config.VMTraceCfg))
+    if err != nil {
+        return nil, fmt.Errorf("failed to create tracer %s: %v", config.VMTraceCfg, err)
+    }
+    vmConfig.Tracer = t
+}
+```
+
+### 6. Blockchain Integration
 
 **File**: `core/blockchain.go`
 
@@ -295,11 +321,41 @@ Before merging:
 }
 ```
 
+## Deployment
+
+### Docker Deployment (Recommended)
+
+For detailed Docker deployment instructions, see [DOCKER_DEPLOYMENT.md](DOCKER_DEPLOYMENT.md).
+
+Quick start:
+```bash
+# 1. Configure environment
+cp .env.example .env
+# Edit .env with AWS credentials and Kafka brokers
+
+# 2. Configure pipeline
+# Edit config/pipeline-config.json with S3 buckets and Kafka settings
+
+# 3. Deploy
+./deploy.sh deploy
+
+# 4. Monitor
+./deploy.sh logs bitlayer-l2
+```
+
+Available deployment files:
+- `docker-compose.debank.yml` - Docker Compose configuration
+- `Dockerfile.debank` - Docker image build
+- `deploy.sh` - Deployment automation script
+- `config/pipeline-config.json` - Pipeline configuration
+- `.env.example` - Environment variables template
+
 ## References
 
 - **Blast implementation**: `/Users/lihe/ghorg/chaintable/blast/blast-geth/`
 - **Original blast**: `/Users/lihe/code/upstream-refs/origin-blast/blast-geth/`
 - **Migration guide**: `/Users/lihe/code/task_oasys/低版本geth链改造详细文档.md`
+- **Docker deployment**: [DOCKER_DEPLOYMENT.md](DOCKER_DEPLOYMENT.md)
 
 ## Migration Notes
 
