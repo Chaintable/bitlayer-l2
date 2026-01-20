@@ -153,9 +153,17 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 		}
 
 		// Set EffectiveGasPrice on receipt for tracing
-		// TODO(lihe): Verify if bitlayer-l2 requires special handling for EffectiveGasPrice calculation
+		// TODO(lihe): FIXED - Changed from EffectiveGasTipValue to EffectiveGasPrice
+		// Background:
+		//   - Blast implementation uses EffectiveGasTipValue (only tip, missing baseFee)
+		//   - chaintable-go-ethereum uses effectiveGasPrice (tip + baseFee) - CORRECT
+		//   - For EIP-1559 txs: EffectiveGasPrice = min(gasTipCap, gasFeeCap-baseFee) + baseFee
+		//   - Blast's implementation is incorrect but may have adapted downstream
+		//   - bitlayer-l2 should use correct calculation for accurate gas price data
+		// Risk: If downstream pipeline expects Blast's incorrect format, this may cause issues
+		// Mitigation: Monitor pipeline data after deployment, compare with expected values
 		if pipelineTracer != nil {
-			receipt.EffectiveGasPrice = tx.EffectiveGasTipValue(header.BaseFee)
+			receipt.EffectiveGasPrice = tx.EffectiveGasPrice(header.BaseFee)
 			pipelineTracer.OnTxEnd(receipt, err)
 		}
 

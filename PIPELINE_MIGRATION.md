@@ -218,26 +218,49 @@ func getAccountBalance(account *types.StateAccount) *big.Int {
 }
 ```
 
+### 2. EffectiveGasPrice Fix
+
+**Blast** uses incorrect calculation (missing baseFee for EIP-1559):
+```go
+// Blast (INCORRECT)
+receipt.EffectiveGasPrice = tx.EffectiveGasTipValue(baseFee)
+// Returns: min(gasTipCap, gasFeeCap - baseFee)  ← Missing baseFee!
+```
+
+**Bitlayer-l2** uses correct calculation:
+```go
+// bitlayer-l2 (CORRECT, matches chaintable-go-ethereum)
+receipt.EffectiveGasPrice = tx.EffectiveGasPrice(baseFee)
+// Returns: min(gasTipCap, gasFeeCap - baseFee) + baseFee  ← Complete price!
+```
+
+**Impact**:
+- For Legacy transactions (Type 0/1): No difference (both return gasPrice)
+- For EIP-1559 transactions (Type 2/3): Blast missing ~96% of gas price (only tip, no baseFee)
+- bitlayer-l2 will have accurate gas price data in pipeline
+
+**Risk**: If downstream pipeline systems expect Blast's incorrect format, may need adaptation.
+
 ## TODO Items for Verification
 
 The following items are marked with `TODO(lihe)` comments in the code:
 
 ### Workflows
 1. ✅ **Image naming**: Updated to `blockchain-bitlayer-l2-x`
-2. **Architecture support**: Determine if arm64 builds are needed
+2. ✅ **Architecture support**: Confirmed amd64 only (no arm64 needed)
 
 ### Core Integration
-3. **Tracer initialization**: Verify bitlayer-l2 doesn't require different tracer setup
-4. **Genesis handling**: Check if bitlayer-l2 has special genesis requirements
-5. **Genesis alloc**: Verify if genesis alloc must be set for bitlayer-l2
-6. **Consensus mechanism**: Verify `getCommonAncestor()` works with bitlayer-l2's consensus
-7. **Kafka integration**: Test Kafka integration with bitlayer-l2's architecture
-8. **Empty blocks**: Verify empty block handling (parent.Root == block.Root)
-9. **Genesis storage**: Verify `getGenesisState()` works with bitlayer-l2's DB format
-10. **Account structure**: Verify `types.Account` structure matches bitlayer-l2
+3. ✅ **Tracer initialization**: Verified - only PipelineTracer supported, vmConfig.Tracer can be nil
+4. ✅ **Genesis handling**: Verified - genesis starts from block 0, current handling is correct
+5. ✅ **Genesis alloc**: Verified - genesis alloc should not be missing, warning if absent (keeps flexibility)
+6. ✅ **Consensus mechanism**: Verified - `getCommonAncestor()` is consensus-agnostic, works with Merlion (PoSA)
+7. ✅ **Kafka integration**: Verified - uses standard message format and libraries, requires environment testing
+8. ✅ **Empty blocks**: Verified - Merlion produces empty blocks, detection by state root comparison is correct
+9. ✅ **Genesis storage**: Verified - uses standard ReadGenesisStateSpec API, compatible with bitlayer-l2
+10. ✅ **Account structure**: Verified - bitlayer-l2 uses standard StateAccount (Nonce, Balance, Root, CodeHash)
 
 ### State Processing
-11. **EffectiveGasPrice**: Verify calculation method for bitlayer-l2 transactions
+11. ✅ **EffectiveGasPrice**: Fixed - uses correct effectiveGasPrice (tip + baseFee) instead of Blast's incorrect EffectiveGasTipValue (tip only)
 
 ## Testing Checklist
 

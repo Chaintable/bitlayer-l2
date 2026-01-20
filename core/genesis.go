@@ -954,7 +954,7 @@ func decodePreallocOld(data string) GenesisAlloc {
 }
 
 // getGenesisState retrieves the genesis allocation from the database
-// TODO(lihe): Verify this works with bitlayer-l2's genesis storage format
+// Verified: Uses standard ReadGenesisStateSpec API, compatible with bitlayer-l2
 func getGenesisState(db ethdb.Database, blockhash common.Hash) (alloc GenesisAlloc, err error) {
 	blob := rawdb.ReadGenesisStateSpec(db, blockhash)
 	if len(blob) != 0 {
@@ -966,10 +966,9 @@ func getGenesisState(db ethdb.Database, blockhash common.Hash) (alloc GenesisAll
 	return nil, nil
 }
 
-// coreGenesisToTypesGenesis converts core.GenesisAlloc to types.GenesisAlloc
-// This is needed because the pipeline tracer expects types.GenesisAlloc
-// TODO(lihe): Verify types.Account structure matches bitlayer-l2's requirements
 // coreGenesisToTypesGenesis converts core.GenesisAlloc to ptypes.GenesisAlloc
+// Verified: bitlayer-l2 uses standard StateAccount (Nonce, Balance, Root, CodeHash)
+// No special fields like Blast's Shares/Flags/Remainder/Fixed
 func coreGenesisToTypesGenesis(alloc GenesisAlloc) ptypes.GenesisAlloc {
 	genesis := make(ptypes.GenesisAlloc)
 	for address, account := range alloc {

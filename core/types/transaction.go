@@ -366,6 +366,14 @@ func (tx *Transaction) EffectiveGasTipValue(baseFee *big.Int) *big.Int {
 	return effectiveTip
 }
 
+// EffectiveGasPrice returns the actual gas price paid per unit of gas.
+// For legacy transactions (Type 0/1), this is the gas price.
+// For EIP-1559 transactions (Type 2/3), this is min(gasTipCap, gasFeeCap - baseFee) + baseFee.
+// This is the correct value to use for receipt.EffectiveGasPrice field.
+func (tx *Transaction) EffectiveGasPrice(baseFee *big.Int) *big.Int {
+	return tx.inner.effectiveGasPrice(new(big.Int), baseFee)
+}
+
 // EffectiveGasTipCmp compares the effective gasTipCap of two transactions assuming the given base fee.
 func (tx *Transaction) EffectiveGasTipCmp(other *Transaction, baseFee *big.Int) int {
 	if baseFee == nil {

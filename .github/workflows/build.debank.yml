@@ -16,7 +16,7 @@ jobs:
   build-artifacts:
     strategy:
       matrix:
-        arch: [amd64]  # TODO(lihe): Add arm64 if needed for bitlayer-l2
+        arch: [amd64]  # bitlayer-l2 only needs amd64 architecture
     runs-on: [self-hosted, "${{ matrix.arch }}"]
     steps:
       - name: Checkout code
