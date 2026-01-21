@@ -48,6 +48,8 @@ github.com/BurntSushi/toml v0.3.1/go.mod h1:xHWCNGjB5oqiDr8zfno3MHue2Ht5sIBksp03
 github.com/BurntSushi/toml v1.3.2 h1:o7IhLm0Msx3BaB+n3Ag7L8EVlByGnpq14C4YWiu/gL8=
 github.com/BurntSushi/toml v1.3.2/go.mod h1:CxXYINrC8qIiEnFrOxCa7Jy5BFHlXnUU2pbicEuybxQ=
 github.com/BurntSushi/xgb v0.0.0-20160522181843-27f122750802/go.mod h1:IVnqGOEym/WlBOVXweHU+Q+/VP0lqqI8lqeDx9IjBqo=
+github.com/Chaintable/pipeline v0.0.62-bitlayer-v1.1.10 h1:mEoSvY40W88s2F1aRxT2X7eJBwcjG2tn+3aSaVfzALc=
+github.com/Chaintable/pipeline v0.0.62-bitlayer-v1.1.10/go.mod h1:1L/v5FvHyqI5F+1rbEjgLnlCzGYDPUa33aAi13+0hLk=
 github.com/Chaintable/pipeline v0.0.64-0.20260121081918-c1394ebac775 h1:dM2UkF/ob7tvuTHXomn447DU/D/xKxBkThPzMYC1ehQ=
 github.com/Chaintable/pipeline v0.0.64-0.20260121081918-c1394ebac775/go.mod h1:n7yZ9reyx4n7XeutSHEEUrvepQ3cNmxGu/A+U3iq6gA=
 github.com/Chaintable/pipeline v0.0.64-0.20260121100029-f521fba40f8b h1:barOrJb/w9X19D+lJB7Z6+VSxP7i4InDF6nqKaFqkRQ=
