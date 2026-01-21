@@ -1341,7 +1341,7 @@ func (s *StateDB) Commit(block uint64, deleteEmptyObjects bool) (common.Hash, er
 		// Write any contract code associated with the state object
 		if obj.code != nil && obj.dirtyCode {
 			rawdb.WriteCode(codeWriter, common.BytesToHash(obj.CodeHash()), obj.code)
-			codes[common.BytesToHash(obj.KeccakCodeHash())] = obj.code
+			codes[common.BytesToHash(obj.CodeHash())] = obj.code // todo(lihe) is codehash?
 			obj.dirtyCode = false
 		}
 		// Write any storage changes in the state object to its storage trie
