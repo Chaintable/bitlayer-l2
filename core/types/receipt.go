@@ -74,7 +74,7 @@ type Receipt struct {
 }
 
 func (r *Receipt) SetEffectiveGasPrice(tx *Transaction, baseFee *big.Int) {
-	r.EffectiveGasPrice = tx.EffectiveGasTipValue(baseFee)
+	r.EffectiveGasPrice = tx.inner.effectiveGasPrice(new(big.Int), baseFee)
 }
 
 type receiptMarshaling struct {

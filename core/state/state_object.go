@@ -376,10 +376,12 @@ func (s *stateObject) updateTrieConcurrencySafe() (Trie, error) {
 		{
 			if flatstorage == nil {
 				// Retrieve the old storage map, if available, create a new one otherwise
+				s.db.storageMu.Lock()
 				if flatstorage = s.db.Storage[s.addrHash]; flatstorage == nil {
 					flatstorage = make(map[common.Hash][]byte)
 					s.db.Storage[s.addrHash] = flatstorage
 				}
+				s.db.storageMu.Unlock()
 			}
 			flatstorage[khash] = encoded // encoded will be nil if it's deleted
 		}

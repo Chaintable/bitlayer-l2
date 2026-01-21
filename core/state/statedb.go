@@ -147,6 +147,7 @@ type StateDB struct {
 	Destructs map[common.Hash]struct{}
 	Accounts  map[common.Hash][]byte
 	Storage   map[common.Hash]map[common.Hash][]byte
+	storageMu sync.RWMutex
 }
 
 // New creates a new state from a given trie.
