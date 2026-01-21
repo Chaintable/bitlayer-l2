@@ -169,6 +169,8 @@ type Config struct {
 	TraceAction int `toml:",omitempty"`
 
 	TraceFilterCount uint64 `toml:",omitempty"`
+
+	VMTraceCfg string
 }
 
 // CreateConsensusEngine creates a consensus engine for the given chain config.

@@ -29,6 +29,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	ptypes "github.com/Chaintable/pipeline/types"
+
+	"github.com/Chaintable/pipeline/tracer"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/lru"
 	"github.com/ethereum/go-ethereum/common/mclock"
@@ -38,6 +41,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/state/snapshot"
+	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/ethdb"
@@ -258,6 +262,8 @@ type BlockChain struct {
 	processor  Processor // Block transaction processor interface
 	forker     *ForkChoice
 	vmConfig   vm.Config
+
+	logger *tracing.Hooks
 }
 
 // NewBlockChain returns a fully initialised block chain using information
@@ -424,6 +430,32 @@ func NewBlockChain(db ethdb.Database, cacheConfig *CacheConfig, genesis *Genesis
 				}
 				log.Error("Chain rewind was successful, resuming normal operation")
 			}
+		}
+	}
+
+	// 将全局的入参 config 设置到 bc
+	if vmConfig.Tracer != nil {
+		if _, ok := vmConfig.Tracer.(*tracer.PipelineTracer); !ok {
+			log.Crit("vmConfig.Tracer must be a pipeline.Tracer")
+		} else {
+			bc.logger = tracing.BuildHooks(vmConfig.Tracer.(*tracer.PipelineTracer))
+		}
+	}
+
+	if bc.logger != nil && bc.logger.OnBlockchainInit != nil {
+		bc.logger.OnBlockchainInit(chainConfig)
+	}
+
+	if bc.logger != nil && bc.logger.OnGenesisBlock != nil {
+		if block := bc.CurrentBlock(); block.Number.Uint64() == 0 {
+			alloc, err := getGenesisState(bc.db, block.Hash())
+			if err != nil {
+				return nil, fmt.Errorf("failed to get genesis state: %w", err)
+			}
+			if alloc == nil {
+				return nil, errors.New("requires genesis alloc to be set")
+			}
+			bc.logger.OnGenesisBlock(bc.genesisBlock, coreGenesisToTypesGenesis(alloc))
 		}
 	}
 
@@ -1029,6 +1061,12 @@ func (bc *BlockChain) Stop() {
 			}
 		}
 	}
+
+	// Allow tracers to clean-up and release resources.
+	if bc.logger != nil && bc.logger.OnClose != nil {
+		bc.logger.OnClose()
+	}
+
 	// Close the trie database, release all the held resources as the last step.
 	if err := bc.triedb.Close(); err != nil {
 		log.Error("Failed to close trie database", "err", err)
@@ -1381,6 +1419,7 @@ func (bc *BlockChain) writeKnownBlock(block *types.Block) error {
 		}
 	}
 	bc.writeHeadBlock(block)
+	bc.pushBlockChange(block)
 	return nil
 }
 
@@ -1478,6 +1517,7 @@ func (bc *BlockChain) writeBlockWithState(block *types.Block, receipts []*types.
 		}
 		bc.triedb.Dereference(root)
 	}
+	bc.pushBlockChange(block)
 
 	return nil
 }
@@ -1817,11 +1857,28 @@ func (bc *BlockChain) insertChain(chain types.Blocks, setHead bool) (int, error)
 		}
 
 		// Process block using the parent state as reference point
+		// 插入新节点的时候，OnBlockStart 并且设置 statedb 的 hook
+		log.Info("insertChain new block", "blockNumber", block.Number(), "hash", block.Hash().String(), "parentRoot", parent.Root.String())
+		var pipelineTracer *tracer.PipelineTracer
+		if bc.vmConfig.Tracer != nil {
+			if p, ok := bc.vmConfig.Tracer.(*tracer.PipelineTracer); !ok {
+				log.Crit("vmConfig.Tracer must be a pipeline.Tracer")
+			} else {
+				pipelineTracer = p
+			}
+		}
+		if pipelineTracer != nil {
+			pipelineTracer.OnBlockStart(block)
+			statedb.SetHooks(tracing.BuildHooks(pipelineTracer))
+		}
 		pstart := time.Now()
 		receipts, logs, internalTxs, usedGas, err := bc.processor.Process(block, statedb, bc.vmConfig)
 		if err != nil {
 			bc.reportBlock(block, receipts, err)
 			followupInterrupt.Store(true)
+			if pipelineTracer != nil {
+				pipelineTracer.OnBlockEnd(err)
+			}
 			return it.index, err
 		}
 		ptime := time.Since(pstart)
@@ -1865,6 +1922,10 @@ func (bc *BlockChain) insertChain(chain types.Blocks, setHead bool) (int, error)
 		followupInterrupt.Store(true)
 		if err != nil {
 			return it.index, err
+		}
+		// 插入节点结束
+		if pipelineTracer != nil {
+			pipelineTracer.OnBlockEnd(nil)
 		}
 		// Update the metrics touched during block commit
 		accountCommitTimer.Update(statedb.AccountCommits)   // Account commits are complete, we can mark them
@@ -2599,4 +2660,108 @@ func (bc *BlockChain) SetTrieFlushInterval(interval time.Duration) {
 // GetTrieFlushInterval gets the in-memory tries flush interval
 func (bc *BlockChain) GetTrieFlushInterval() time.Duration {
 	return time.Duration(bc.flushInterval.Load())
+}
+
+// 返回两个块的共同祖先，以及两个块的从共同祖先到两个块的路径,即drop和new
+func (bc *BlockChain) getCommonAncestor(blocka ptypes.BlockContext, blockb ptypes.BlockContext) (ptypes.BlockContext, []ptypes.BlockContext, []ptypes.BlockContext) {
+	var (
+		chainA, chainB []ptypes.BlockContext
+	)
+	if blockb.ParentHash == blocka.Hash {
+		return blocka, chainA, []ptypes.BlockContext{blockb}
+	}
+	for blockb.BlockNumber > blocka.BlockNumber {
+		chainB = append(chainB, blockb)
+		headerb := bc.GetHeaderByHash(blockb.ParentHash)
+		if headerb == nil {
+			log.Crit("Failed to get header by hash", "hash", blockb.ParentHash)
+		} else {
+			blockb = ptypes.BlockContext{
+				BlockNumber: headerb.Number.Uint64(),
+				Hash:        headerb.Hash(),
+				ParentHash:  headerb.ParentHash,
+				Timestamp:   headerb.Time,
+			}
+		}
+	}
+	for blocka.Hash != blockb.Hash {
+		chainA = append(chainA, blocka)
+		headera := bc.GetHeaderByHash(blocka.ParentHash)
+		if headera == nil {
+			log.Crit("Failed to get header by hash", "hash", blocka.ParentHash)
+		} else {
+			blocka = ptypes.BlockContext{
+				BlockNumber: headera.Number.Uint64(),
+				Hash:        headera.Hash(),
+				ParentHash:  headera.ParentHash,
+				Timestamp:   headera.Time,
+			}
+		}
+
+		chainB = append(chainB, blockb)
+		headerb := bc.GetHeaderByHash(blockb.ParentHash)
+		if headerb == nil {
+			log.Crit("Failed to get header by hash", "hash", blockb.ParentHash)
+		} else {
+			blockb = ptypes.BlockContext{
+				BlockNumber: headerb.Number.Uint64(),
+				Hash:        headerb.Hash(),
+				ParentHash:  headerb.ParentHash,
+				Timestamp:   headerb.Time,
+			}
+		}
+	}
+	// now blocka == blockb == ancestor
+
+	// reverse chainA
+	slices.Reverse(chainA)
+	// reverse chainB
+	slices.Reverse(chainB)
+	return blocka, chainA, chainB
+}
+
+// pushBlockChange push block change to kafka, support debank union nodes
+func (bc *BlockChain) pushBlockChange(block *types.Block) {
+	// 先确保 pipeline tracer 不为空，然后再判断是否需要push kafka
+	// 上一个push kafka的block, 必然存在(至少有genesis block)
+	// 上一个push kafka的block比当前的head block还要新，说明有unwind回退，不需要处理, 即使是fork，等有更新的block的时候再一起push
+	if tracer.NodeXPusher != nil && tracer.NodeXPusher.LastPushedBlock().BlockNumber <= block.NumberU64() {
+		lastPushBlock := tracer.NodeXPusher.LastPushedBlock()
+		if lastPushBlock == nil {
+			return
+		}
+		_, dropBlocks, newBlocks := bc.getCommonAncestor(*lastPushBlock, ptypes.BlockContext{
+			BlockNumber: block.NumberU64(),
+			Hash:        block.Hash(),
+			ParentHash:  block.ParentHash(),
+			Timestamp:   block.Time(),
+		})
+		var blockChange *ptypes.BlockChangeNotification
+		if len(dropBlocks) > 0 {
+			blockChange = &ptypes.BlockChangeNotification{
+				ChangeType: 2,
+				NewBlocks:  newBlocks,
+				DropBlocks: dropBlocks,
+			}
+		} else if len(newBlocks) > 0 {
+			blockChange = &ptypes.BlockChangeNotification{
+				ChangeType: 1,
+				NewBlocks:  newBlocks,
+			}
+		}
+
+		parent := bc.GetHeaderByHash(block.Header().ParentHash)
+
+		if parent != nil && parent.Root == block.Root() {
+			bc.logger.OnCommit(parent.Root, block.Root(), nil, nil, nil, nil, nil, nil)
+		}
+
+		if blockChange != nil {
+			err := tracer.NodeXPusher.PushBlockChangeNotification(blockChange)
+			if err != nil {
+				log.Error("SetCanonical PushBlockChangeNotification error", "err", err)
+			}
+			log.Info("NodeXPusher PushBlockChangeNotification", "blockChange", blockChange)
+		}
+	}
 }

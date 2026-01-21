@@ -50,3 +50,7 @@ profile.cov
 logs/
 
 tests/spec-tests/
+config.toml
+config.yaml
+check_status.sh
+docker-compose.yaml

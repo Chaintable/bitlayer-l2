@@ -28,6 +28,7 @@ import (
 	"github.com/ethereum/go-ethereum/common/gopool"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/state/snapshot"
+	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/log"
@@ -141,6 +142,12 @@ type StateDB struct {
 
 	// Testing hooks
 	onCommit func(states *triestate.Set) // Hook invoked when commit is performed
+
+	hooks     *tracing.Hooks
+	Destructs map[common.Hash]struct{}
+	Accounts  map[common.Hash][]byte
+	Storage   map[common.Hash]map[common.Hash][]byte
+	storageMu sync.RWMutex
 }
 
 // New creates a new state from a given trie.
@@ -168,6 +175,9 @@ func New(root common.Hash, db Database, snaps *snapshot.Tree) (*StateDB, error) 
 		accessList:           newAccessList(),
 		transientStorage:     newTransientStorage(),
 		hasher:               crypto.NewKeccakState(),
+		Destructs:            make(map[common.Hash]struct{}),
+		Accounts:             make(map[common.Hash][]byte),
+		Storage:              make(map[common.Hash]map[common.Hash][]byte),
 	}
 	if sdb.snaps != nil {
 		sdb.snap = sdb.snaps.Snapshot(root)
@@ -215,6 +225,9 @@ func (s *StateDB) AddLog(log *types.Log) {
 	log.TxHash = s.thash
 	log.TxIndex = uint(s.txIndex)
 	log.Index = s.logSize
+	if s.hooks != nil && s.hooks.OnLog != nil {
+		s.hooks.OnLog(log)
+	}
 	s.logs[s.thash] = append(s.logs[s.thash], log)
 	s.logSize++
 }
@@ -548,6 +561,7 @@ func (s *StateDB) updateStateObject(obj *stateObject) {
 			s.accountsOrigin[obj.address] = types.SlimAccountRLP(*obj.origin)
 		}
 	}
+	s.Accounts[obj.addrHash] = obj.slimAccountRLP
 
 	// clear rlp result
 	obj.accountRLP, obj.slimAccountRLP, obj.rlpErr = nil, nil, nil
@@ -728,6 +742,7 @@ func (s *StateDB) createObject(addr common.Address) (newobj, prev *stateObject) 
 		_, prevdestruct := s.stateObjectsDestruct[prev.address]
 		if !prevdestruct {
 			s.stateObjectsDestruct[prev.address] = prev.origin
+			s.Destructs[prev.addrHash] = struct{}{} // bitlayer 实现了类似的机制 todo(lihe) 但是为啥他设置为 origin 了
 		}
 		// There may be some cached account/storage data already since IntermediateRoot
 		// will be called for each transaction before byzantium fork which will always
@@ -799,8 +814,11 @@ func (s *StateDB) Copy() *StateDB {
 		// to the snapshot tree, we need to copy that as well. Otherwise, any
 		// block mined by ourselves will cause gaps in the tree, and force the
 		// miner to operate trie-backed only.
-		snaps: s.snaps,
-		snap:  s.snap,
+		snaps:     s.snaps,
+		snap:      s.snap,
+		Destructs: make(map[common.Hash]struct{}),
+		Accounts:  make(map[common.Hash][]byte),
+		Storage:   make(map[common.Hash]map[common.Hash][]byte),
 	}
 	// Copy the dirty states, logs, and preimages
 	for addr := range s.journal.dirties {
@@ -873,6 +891,23 @@ func (s *StateDB) Copy() *StateDB {
 	if s.prefetcher != nil {
 		state.prefetcher = s.prefetcher.copy()
 	}
+
+	// deep copy
+	for k, v := range s.Destructs {
+		state.Destructs[k] = v
+	}
+	state.Accounts = make(map[common.Hash][]byte)
+	for k, v := range s.Accounts {
+		state.Accounts[k] = v
+	}
+	state.Storage = make(map[common.Hash]map[common.Hash][]byte)
+	for k, v := range s.Storage {
+		temp := make(map[common.Hash][]byte)
+		for kk, vv := range v {
+			temp[kk] = vv
+		}
+		state.Storage[k] = temp
+	}
 	return state
 }
 
@@ -937,6 +972,11 @@ func (s *StateDB) Finalise(deleteEmptyObjects bool) {
 			delete(s.storages, obj.addrHash)      // Clear out any previously updated storage data (may be recreated via a resurrect)
 			delete(s.accountsOrigin, obj.address) // Clear out any previously updated account data (may be recreated via a resurrect)
 			delete(s.storagesOrigin, obj.address) // Clear out any previously updated storage data (may be recreated via a resurrect)
+
+			// clear out pipeline tracer data
+			s.Destructs[obj.addrHash] = struct{}{}
+			delete(s.Accounts, obj.addrHash)
+			delete(s.Storage, obj.addrHash)
 		} else {
 			obj.finalise(true) // Prefetch slots in the background
 		}
@@ -1268,6 +1308,10 @@ func (s *StateDB) handleDestruction(nodes *trienode.MergedNodeSet) (map[common.A
 // The associated block number of the state transition is also provided
 // for more chain context.
 func (s *StateDB) Commit(block uint64, deleteEmptyObjects bool) (common.Hash, error) {
+	originalRoot := s.originalRoot
+	if originalRoot == (common.Hash{}) {
+		originalRoot = types.EmptyRootHash
+	}
 	// Short circuit in case any database failure occurred earlier.
 	if s.dbErr != nil {
 		return common.Hash{}, fmt.Errorf("commit aborted due to earlier error: %v", s.dbErr)
@@ -1284,6 +1328,8 @@ func (s *StateDB) Commit(block uint64, deleteEmptyObjects bool) (common.Hash, er
 		nodes                   = trienode.NewMergedNodeSet()
 		codeWriter              = s.db.DiskDB().NewBatch()
 	)
+	codes := make(map[common.Hash][]byte)
+
 	// Handle all state deletions first
 	incomplete, err := s.handleDestruction(nodes)
 	if err != nil {
@@ -1298,6 +1344,7 @@ func (s *StateDB) Commit(block uint64, deleteEmptyObjects bool) (common.Hash, er
 		// Write any contract code associated with the state object
 		if obj.code != nil && obj.dirtyCode {
 			rawdb.WriteCode(codeWriter, common.BytesToHash(obj.CodeHash()), obj.code)
+			codes[common.BytesToHash(obj.CodeHash())] = obj.code
 			obj.dirtyCode = false
 		}
 		// Write any storage changes in the state object to its storage trie
@@ -1401,6 +1448,13 @@ func (s *StateDB) Commit(block uint64, deleteEmptyObjects bool) (common.Hash, er
 	s.storagesOrigin = make(map[common.Address]map[common.Hash][]byte)
 	s.stateObjectsDirty = make(map[common.Address]struct{})
 	s.stateObjectsDestruct = make(map[common.Address]*types.StateAccount)
+
+	// commit and clear out
+	if s.hooks != nil && s.hooks.OnCommit != nil {
+		commitRoot := root
+		s.hooks.OnCommit(originalRoot, commitRoot, s.Destructs, s.Accounts, nil, s.Storage, nil, codes)
+	}
+	s.Destructs, s.Accounts, s.Storage = nil, nil, nil
 	return root, nil
 }
 
@@ -1492,6 +1546,10 @@ func (s *StateDB) convertAccountSet(set map[common.Address]*types.StateAccount) 
 		}
 	}
 	return ret
+}
+
+func (s *StateDB) SetHooks(hooks *tracing.Hooks) {
+	s.hooks = hooks
 }
 
 // copySet returns a deep-copied set.
