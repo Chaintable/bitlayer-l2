@@ -62,6 +62,7 @@ func BuildHooks(t *tracer.PipelineTracer) *Hooks {
 		OnBlockchainInit: t.OnBlockchainInit,
 		OnClose:          t.OnClose,
 		OnBlockStart:     t.OnBlockStart,
+		OnBlockEnd:       t.OnBlockEnd,
 		OnTxStart:        t.OnTxStart,
 		OnTxEnd:          t.OnTxEnd,
 		OnLog:            t.OnLog,
