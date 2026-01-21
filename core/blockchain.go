@@ -1419,7 +1419,6 @@ func (bc *BlockChain) writeKnownBlock(block *types.Block) error {
 		}
 	}
 	bc.writeHeadBlock(block)
-	// 写已知block
 	bc.pushBlockChange(block)
 	return nil
 }
@@ -1518,6 +1517,7 @@ func (bc *BlockChain) writeBlockWithState(block *types.Block, receipts []*types.
 		}
 		bc.triedb.Dereference(root)
 	}
+	bc.pushBlockChange(block)
 
 	return nil
 }
@@ -1560,7 +1560,6 @@ func (bc *BlockChain) writeBlockAndSetHead(block *types.Block, receipts []*types
 		bc.writeHeadBlock(block)
 	}
 	bc.futureBlocks.Remove(block.Hash())
-	bc.pushBlockChange(block)
 
 	if status == CanonStatTy {
 		bc.chainFeed.Send(ChainEvent{Block: block, Hash: block.Hash(), Logs: logs})

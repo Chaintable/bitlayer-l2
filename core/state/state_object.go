@@ -314,7 +314,6 @@ func (s *stateObject) updateTrieConcurrencySafe() (Trie, error) {
 		flatstorage map[common.Hash][]byte
 	)
 	tr, err := s.getTrie()
-	hasher := s.db.hasher
 
 	if err != nil {
 		s.db.setError(err)
@@ -373,16 +372,16 @@ func (s *stateObject) updateTrieConcurrencySafe() (Trie, error) {
 				origin[khash] = b
 			}
 		}
-		// todo(lihe) 到底在干啥 v这里的逻辑要重新确定
+		// pipeline tracer record state kv
 		{
 			if flatstorage == nil {
 				// Retrieve the old storage map, if available, create a new one otherwise
 				if flatstorage = s.db.Storage[s.addrHash]; flatstorage == nil {
 					flatstorage = make(map[common.Hash][]byte)
-					s.db.Storage[s.addrHash] = storage
+					s.db.Storage[s.addrHash] = flatstorage
 				}
 			}
-			flatstorage[crypto.HashData(hasher, key[:])] = encoded // v will be nil if it's deleted
+			flatstorage[khash] = encoded // encoded will be nil if it's deleted
 		}
 		// Cache the items for preloading
 		usedStorage = append(usedStorage, common.CopyBytes(key[:])) // Copy needed for closure

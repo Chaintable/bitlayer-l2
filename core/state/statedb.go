@@ -147,7 +147,6 @@ type StateDB struct {
 	Destructs map[common.Hash]struct{}
 	Accounts  map[common.Hash][]byte
 	Storage   map[common.Hash]map[common.Hash][]byte
-	diskRoot  *common.Hash
 }
 
 // New creates a new state from a given trie.
@@ -742,7 +741,7 @@ func (s *StateDB) createObject(addr common.Address) (newobj, prev *stateObject) 
 		_, prevdestruct := s.stateObjectsDestruct[prev.address]
 		if !prevdestruct {
 			s.stateObjectsDestruct[prev.address] = prev.origin
-			s.Destructs[prev.addrHash] = struct{}{} // bitlayer 实现了类似的机制
+			s.Destructs[prev.addrHash] = struct{}{} // bitlayer 实现了类似的机制 todo(lihe) 但是为啥他设置为 origin 了
 		}
 		// There may be some cached account/storage data already since IntermediateRoot
 		// will be called for each transaction before byzantium fork which will always
@@ -814,8 +813,11 @@ func (s *StateDB) Copy() *StateDB {
 		// to the snapshot tree, we need to copy that as well. Otherwise, any
 		// block mined by ourselves will cause gaps in the tree, and force the
 		// miner to operate trie-backed only.
-		snaps: s.snaps,
-		snap:  s.snap,
+		snaps:     s.snaps,
+		snap:      s.snap,
+		Destructs: make(map[common.Hash]struct{}),
+		Accounts:  make(map[common.Hash][]byte),
+		Storage:   make(map[common.Hash]map[common.Hash][]byte),
 	}
 	// Copy the dirty states, logs, and preimages
 	for addr := range s.journal.dirties {
@@ -1341,7 +1343,7 @@ func (s *StateDB) Commit(block uint64, deleteEmptyObjects bool) (common.Hash, er
 		// Write any contract code associated with the state object
 		if obj.code != nil && obj.dirtyCode {
 			rawdb.WriteCode(codeWriter, common.BytesToHash(obj.CodeHash()), obj.code)
-			codes[common.BytesToHash(obj.CodeHash())] = obj.code // todo(lihe) is codehash?
+			codes[common.BytesToHash(obj.CodeHash())] = obj.code
 			obj.dirtyCode = false
 		}
 		// Write any storage changes in the state object to its storage trie
@@ -1449,10 +1451,6 @@ func (s *StateDB) Commit(block uint64, deleteEmptyObjects bool) (common.Hash, er
 	// commit and clear out
 	if s.hooks != nil && s.hooks.OnCommit != nil {
 		commitRoot := root
-		if s.diskRoot != nil {
-			commitRoot = *s.diskRoot
-			log.Info("Use disk root as commit root", "stateRoot", root, "diskRoot", *s.diskRoot)
-		}
 		s.hooks.OnCommit(originalRoot, commitRoot, s.Destructs, s.Accounts, nil, s.Storage, nil, codes)
 	}
 	s.Destructs, s.Accounts, s.Storage = nil, nil, nil
@@ -1551,14 +1549,6 @@ func (s *StateDB) convertAccountSet(set map[common.Address]*types.StateAccount) 
 
 func (s *StateDB) SetHooks(hooks *tracing.Hooks) {
 	s.hooks = hooks
-}
-
-func (s *StateDB) SetDiskRoot(diskRoot common.Hash) {
-	s.diskRoot = &diskRoot
-}
-
-func (s *StateDB) GetDistRoot() *common.Hash {
-	return s.diskRoot
 }
 
 // copySet returns a deep-copied set.

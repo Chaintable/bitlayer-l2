@@ -90,7 +90,7 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 		blockNumber = block.Number()
 		allLogs     []*types.Log
 		gp          = new(GasPool).AddGas(block.GasLimit())
-		tracer      *vm.ActionLogger // todo(lihe): 这里会冲突？千万不要设置 TraceAction
+		tracer      *vm.ActionLogger // ActionLogger or PipelineTracer must only one
 		//internalTxs types.InternalTxs
 	)
 	// Mutate the block and state according to any hard-fork specs

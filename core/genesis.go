@@ -673,7 +673,7 @@ func (g *Genesis) Commit(db ethdb.Database, triedb *trie.Database) (*types.Block
 	if config.Clique != nil && len(block.Extra()) < 32+crypto.SignatureLength {
 		return nil, errors.New("can't start clique chain without signers")
 	}
-	// todo(lihe) 应该不是必须的
+
 	blob, err := json.Marshal(g.Alloc)
 	if err != nil {
 		return nil, err
