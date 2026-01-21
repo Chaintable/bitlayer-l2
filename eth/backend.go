@@ -18,6 +18,7 @@
 package eth
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math/big"
@@ -25,6 +26,7 @@ import (
 	"strconv"
 	"sync"
 
+	"github.com/Chaintable/pipeline/tracer"
 	"github.com/ethereum/go-ethereum/accounts"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
@@ -218,6 +220,15 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 	}
 	if config.OverrideVerkle != nil {
 		overrides.OverrideVerkle = config.OverrideVerkle
+	}
+	log.Info("vmtrace config", "config", config.VMTraceCfg)
+	if len(config.VMTraceCfg) != 0 {
+		t, err := tracer.NewPipelineTracer(json.RawMessage(config.VMTraceCfg))
+		if err != nil {
+			return nil, fmt.Errorf("failed to create tracer %s: %v", config.VMTraceCfg, err)
+		}
+		vmConfig.Tracer = t
+		vmConfig.Debug = true
 	}
 	eth.blockchain, err = core.NewBlockChain(chainDb, cacheConfig, config.Genesis, &overrides, eth.engine, vmConfig, eth.shouldPreserve, &config.TransactionHistory)
 	if err != nil {

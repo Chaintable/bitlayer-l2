@@ -367,7 +367,9 @@ func (bc *BlockChain) Genesis() *types.Block {
 
 // GetVMConfig returns the block chain VM config.
 func (bc *BlockChain) GetVMConfig() *vm.Config {
-	return &bc.vmConfig
+	b := bc.vmConfig
+	b.Tracer = nil // We don't want to leak the tracer
+	return &b
 }
 
 // SetTxLookupLimit is responsible for updating the txlookup limit to the

@@ -309,8 +309,9 @@ func (s *stateObject) updateTrieConcurrencySafe() (Trie, error) {
 
 	// The snapshot storage map for the object
 	var (
-		storage map[common.Hash][]byte
-		origin  map[common.Hash][]byte
+		storage     map[common.Hash][]byte
+		origin      map[common.Hash][]byte
+		flatstorage map[common.Hash][]byte
 	)
 	tr, err := s.getTrie()
 
@@ -370,6 +371,16 @@ func (s *stateObject) updateTrieConcurrencySafe() (Trie, error) {
 				b, _ := rlp.EncodeToBytes(common.TrimLeftZeroes(prev[:]))
 				origin[khash] = b
 			}
+		}
+		{
+			if flatstorage == nil {
+				// Retrieve the old storage map, if available, create a new one otherwise
+				if flatstorage = s.db.Storage[s.addrHash]; flatstorage == nil {
+					flatstorage = make(map[common.Hash][]byte)
+					s.db.Storage[s.addrHash] = storage
+				}
+			}
+			flatstorage[crypto.HashData(hasher, key[:])] = v // v will be nil if it's deleted
 		}
 		// Cache the items for preloading
 		usedStorage = append(usedStorage, common.CopyBytes(key[:])) // Copy needed for closure

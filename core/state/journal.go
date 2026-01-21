@@ -166,6 +166,9 @@ func (ch resetObjectChange) revert(s *StateDB) {
 	if !ch.prevdestruct {
 		delete(s.stateObjectsDestruct, ch.prev.address)
 	}
+	if !ch.prevdestruct {
+		delete(s.Destructs, ch.prev.addrHash)
+	}
 	if ch.prevAccount != nil {
 		s.accounts[ch.prev.addrHash] = ch.prevAccount
 	}

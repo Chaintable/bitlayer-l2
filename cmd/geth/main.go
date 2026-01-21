@@ -151,6 +151,7 @@ var (
 		utils.LogBacktraceAtFlag,
 		utils.TraceActionFlag,
 		utils.TraceFilterCount,
+		utils.VMTraceJsonConfigFlag,
 	}, utils.NetworkFlags, utils.DatabaseFlags)
 
 	rpcFlags = []cli.Flag{

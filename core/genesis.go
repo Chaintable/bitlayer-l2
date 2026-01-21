@@ -673,6 +673,11 @@ func (g *Genesis) Commit(db ethdb.Database, triedb *trie.Database) (*types.Block
 	if config.Clique != nil && len(block.Extra()) < 32+crypto.SignatureLength {
 		return nil, errors.New("can't start clique chain without signers")
 	}
+	// todo(lihe) 应该不是必须的
+	blob, err := json.Marshal(g.Alloc)
+	if err != nil {
+		return nil, err
+	}
 	// All the checks has passed, flush the states derived from the genesis
 	// specification as well as the specification itself into the provided
 	// database.
@@ -689,6 +694,7 @@ func (g *Genesis) Commit(db ethdb.Database, triedb *trie.Database) (*types.Block
 	rawdb.WriteHeadFastBlockHash(db, block.Hash())
 	rawdb.WriteHeadHeaderHash(db, block.Hash())
 	rawdb.WriteChainConfig(db, block.Hash(), config)
+	rawdb.WriteGenesisStateSpec(db, block.Hash(), blob)
 	return block, nil
 }
 
@@ -949,4 +955,59 @@ func decodePreallocOld(data string) GenesisAlloc {
 		ga[common.BigToAddress(account.Addr)] = acc
 	}
 	return ga
+}
+
+func getGenesisState(db ethdb.Database, blockhash common.Hash) (alloc GenesisAlloc, err error) {
+	blob := rawdb.ReadGenesisStateSpec(db, blockhash)
+	if len(blob) != 0 {
+		if err := alloc.UnmarshalJSON(blob); err != nil {
+			return nil, err
+		}
+
+		return alloc, nil
+	}
+
+	// Genesis allocation is missing and there are several possibilities:
+	// the node is legacy which doesn't persist the genesis allocation or
+	// the persisted allocation is just lost.
+	// - supported networks(mainnet, testnets), recover with defined allocations
+	// - private network, can't recover
+	var genesis *Genesis
+	switch blockhash {
+	case params.MainnetGenesisHash:
+		genesis = DefaultGenesisBlock()
+	case params.SepoliaGenesisHash:
+		genesis = DefaultSepoliaGenesisBlock()
+	case params.RopstenGenesisHash:
+		genesis = DefaultRopstenGenesisBlock()
+	case params.RinkebyGenesisHash:
+		genesis = DefaultRinkebyGenesisBlock()
+	case params.GoerliGenesisHash:
+		genesis = DefaultGoerliGenesisBlock()
+	case params.ScrollAlphaGenesisHash:
+		genesis = DefaultScrollAlphaGenesisBlock()
+	case params.ScrollSepoliaGenesisHash:
+		genesis = DefaultScrollSepoliaGenesisBlock()
+	case params.ScrollMainnetGenesisHash:
+		genesis = DefaultScrollMainnetGenesisBlock()
+	}
+	if genesis != nil {
+		return genesis.Alloc, nil
+	}
+
+	return nil, nil
+}
+
+func coreGenesisToTypesGenesis(alloc GenesisAlloc) types.GenesisAlloc {
+	genesis := make(map[common.Address]types.Account)
+	for address, account := range alloc {
+		genesis[address] = types.Account{
+			Code:       account.Code,
+			Storage:    account.Storage,
+			Balance:    account.Balance,
+			Nonce:      account.Nonce,
+			PrivateKey: account.PrivateKey,
+		}
+	}
+	return genesis
 }

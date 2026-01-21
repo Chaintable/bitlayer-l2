@@ -22,6 +22,7 @@ import (
 	"math/big"
 	"sync"
 
+	"github.com/Chaintable/pipeline/tracer"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/gopool"
 	"github.com/ethereum/go-ethereum/consensus"
@@ -30,6 +31,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
 )
 
@@ -71,17 +73,25 @@ func CreatingBloomParallel(wg *sync.WaitGroup) ModifyProcessOptionFunc {
 // Process returns the receipts and logs accumulated during the process and
 // returns the amount of gas that was used in the process. If any of the
 // transactions failed to execute due to insufficient gas it will return an error.
-func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg vm.Config) (types.Receipts, []*types.Log, types.InternalTxs, uint64, error) {
+func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg vm.Config) (receipts types.Receipts, logs []*types.Log, internalTxs types.InternalTxs, gasUsed uint64, err error) {
+	var pipelineTracer *tracer.PipelineTracer
+	if cfg.Tracer != nil {
+		if p, ok := cfg.Tracer.(*tracer.PipelineTracer); !ok {
+			log.Crit("vmConfig.Tracer must be a pipeline.Tracer")
+		} else {
+			pipelineTracer = p
+		}
+	}
 	var (
-		receipts    types.Receipts
+		//receipts    types.Receipts
 		usedGas     = new(uint64)
 		header      = block.Header()
 		blockHash   = block.Hash()
 		blockNumber = block.Number()
 		allLogs     []*types.Log
 		gp          = new(GasPool).AddGas(block.GasLimit())
-		tracer      *vm.ActionLogger
-		internalTxs types.InternalTxs
+		tracer      *vm.ActionLogger // todo(lihe): 这里会冲突？千万不要设置 TraceAction
+		//internalTxs types.InternalTxs
 	)
 	// Mutate the block and state according to any hard-fork specs
 	if p.config.DAOForkSupport && p.config.DAOForkBlock != nil && p.config.DAOForkBlock.Cmp(block.Number()) == 0 {
@@ -121,9 +131,16 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 		}
 
 		statedb.SetTxContext(tx.Hash(), i)
+		if pipelineTracer != nil {
+			pipelineTracer.OnTxStart(tx, msg.From)
+		}
 		receipt, err := applyTransaction(msg, p.config, gp, statedb, blockNumber, blockHash, tx, usedGas, vmenv, CreatingBloomParallel(&bloomWg))
 		if err != nil {
 			return nil, nil, nil, 0, fmt.Errorf("could not apply tx %d [%v]: %w", i, tx.Hash().Hex(), err)
+		}
+		if pipelineTracer != nil {
+			receipt.SetEffectiveGasPrice(tx, vmenv.Context.BaseFee)
+			pipelineTracer.OnTxEnd(receipt, err)
 		}
 		receipts = append(receipts, receipt)
 		allLogs = append(allLogs, receipt.Logs...)

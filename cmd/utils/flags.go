@@ -940,6 +940,12 @@ Please note that --` + MetricsHTTPFlag.Name + ` must be set to start the server.
 		Value: ethconfig.Defaults.TraceFilterCount,
 		Usage: "trace filter count",
 	}
+
+	VMTraceJsonConfigFlag = &cli.StringFlag{
+		Name:  "vmtrace.jsonconfig",
+		Usage: "Tracer configuration (JSON)",
+		Value: "{}",
+	}
 )
 
 var (
@@ -1903,6 +1909,11 @@ func SetEthConfig(ctx *cli.Context, stack *node.Node, cfg *ethconfig.Config) {
 	log.Info("Initializing the KZG library", "backend", ctx.String(CryptoKZGFlag.Name))
 	if err := kzg4844.UseCKZG(ctx.String(CryptoKZGFlag.Name) == "ckzg"); err != nil {
 		Fatalf("Failed to set KZG library implementation to %s: %v", ctx.String(CryptoKZGFlag.Name), err)
+	}
+	if ctx.IsSet(VMTraceJsonConfigFlag.Name) {
+		if vmTraceCfg := ctx.String(VMTraceJsonConfigFlag.Name); vmTraceCfg != "" {
+			cfg.VMTraceCfg = vmTraceCfg
+		}
 	}
 }
 
