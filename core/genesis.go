@@ -978,18 +978,18 @@ func getGenesisState(db ethdb.Database, blockhash common.Hash) (alloc GenesisAll
 		genesis = DefaultGenesisBlock()
 	case params.SepoliaGenesisHash:
 		genesis = DefaultSepoliaGenesisBlock()
-	case params.RopstenGenesisHash:
-		genesis = DefaultRopstenGenesisBlock()
-	case params.RinkebyGenesisHash:
-		genesis = DefaultRinkebyGenesisBlock()
+	//case params.RopstenGenesisHash:
+	//	genesis = DefaultRopstenGenesisBlock()
+	//case params.RinkebyGenesisHash:
+	//	genesis = DefaultRinkebyGenesisBlock()
 	case params.GoerliGenesisHash:
 		genesis = DefaultGoerliGenesisBlock()
-	case params.ScrollAlphaGenesisHash:
-		genesis = DefaultScrollAlphaGenesisBlock()
-	case params.ScrollSepoliaGenesisHash:
-		genesis = DefaultScrollSepoliaGenesisBlock()
-	case params.ScrollMainnetGenesisHash:
-		genesis = DefaultScrollMainnetGenesisBlock()
+		//case params.ScrollAlphaGenesisHash:
+		//	genesis = DefaultScrollAlphaGenesisBlock()
+		//case params.ScrollSepoliaGenesisHash:
+		//	genesis = DefaultScrollSepoliaGenesisBlock()
+		//case params.ScrollMainnetGenesisHash:
+		//	genesis = DefaultScrollMainnetGenesisBlock()
 	}
 	if genesis != nil {
 		return genesis.Alloc, nil

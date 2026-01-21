@@ -3,7 +3,6 @@ package tracing
 import (
 	"github.com/Chaintable/pipeline/tracer"
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/params"
 )
@@ -34,7 +33,7 @@ type (
 	BlockEndHook = func(err error)
 
 	// GenesisBlockHook is called when the genesis block is being processed.
-	GenesisBlockHook = func(genesis *types.Block, alloc core.GenesisAlloc)
+	GenesisBlockHook = func(genesis *types.Block, alloc types.GenesisAlloc)
 
 	// CommitHook is called when the state is committed.
 	CommitHook = func(originRoot common.Hash, root common.Hash, destructs map[common.Hash]struct{}, accounts map[common.Hash][]byte, accountsOrigin map[common.Address][]byte, storages map[common.Hash]map[common.Hash][]byte, storagesOrigin map[common.Address]map[common.Hash][]byte, codes map[common.Hash][]byte)
