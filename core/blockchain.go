@@ -2728,6 +2728,7 @@ func (bc *BlockChain) pushBlockChange(block *types.Block) {
 	if tracer.NodeXPusher != nil && tracer.NodeXPusher.LastPushedBlock().BlockNumber <= block.NumberU64() {
 		lastPushBlock := tracer.NodeXPusher.LastPushedBlock()
 		if lastPushBlock == nil {
+			log.Crit("pushBlockChange lastPushBlock is nil")
 			return
 		}
 		_, dropBlocks, newBlocks := bc.getCommonAncestor(*lastPushBlock, ptypes.BlockContext{
