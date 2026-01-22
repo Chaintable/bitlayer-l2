@@ -2727,10 +2727,6 @@ func (bc *BlockChain) pushBlockChange(block *types.Block) {
 	// 上一个push kafka的block比当前的head block还要新，说明有unwind回退，不需要处理, 即使是fork，等有更新的block的时候再一起push
 	if tracer.NodeXPusher != nil && tracer.NodeXPusher.LastPushedBlock().BlockNumber <= block.NumberU64() {
 		lastPushBlock := tracer.NodeXPusher.LastPushedBlock()
-		if lastPushBlock == nil {
-			log.Warn("pushBlockChange lastPushBlock is nil")
-			return
-		}
 		_, dropBlocks, newBlocks := bc.getCommonAncestor(*lastPushBlock, ptypes.BlockContext{
 			BlockNumber: block.NumberU64(),
 			Hash:        block.Hash(),
