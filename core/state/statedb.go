@@ -742,7 +742,7 @@ func (s *StateDB) createObject(addr common.Address) (newobj, prev *stateObject) 
 		_, prevdestruct := s.stateObjectsDestruct[prev.address]
 		if !prevdestruct {
 			s.stateObjectsDestruct[prev.address] = prev.origin
-			s.Destructs[prev.addrHash] = struct{}{} // bitlayer 实现了类似的机制 todo(lihe) 但是为啥他设置为 origin 了
+			s.Destructs[prev.addrHash] = struct{}{} // bitlayer 实现了类似的机制
 		}
 		// There may be some cached account/storage data already since IntermediateRoot
 		// will be called for each transaction before byzantium fork which will always

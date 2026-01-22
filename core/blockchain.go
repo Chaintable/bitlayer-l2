@@ -450,6 +450,7 @@ func NewBlockChain(db ethdb.Database, cacheConfig *CacheConfig, genesis *Genesis
 		if block := bc.CurrentBlock(); block.Number.Uint64() == 0 {
 			alloc, err := getGenesisState(bc.db, block.Hash())
 			if err != nil {
+				// 不可能是这里的问题，外层都 panic 掉了
 				return nil, fmt.Errorf("failed to get genesis state: %w", err)
 			}
 			if alloc == nil {
@@ -1467,7 +1468,11 @@ func (bc *BlockChain) writeBlockWithState(block *types.Block, receipts []*types.
 	}
 	// If we're running an archive node, always flush
 	if bc.cacheConfig.TrieDirtyDisabled {
-		return bc.triedb.Commit(root, false)
+		commitErr := bc.triedb.Commit(root, false)
+		if commitErr == nil {
+			bc.pushBlockChange(block)
+		}
+		return commitErr
 	}
 	// Full but not archive node, do proper garbage collection
 	bc.triedb.Reference(root, common.Hash{}) // metadata reference to keep trie alive
@@ -2735,12 +2740,14 @@ func (bc *BlockChain) pushBlockChange(block *types.Block) {
 		})
 		var blockChange *ptypes.BlockChangeNotification
 		if len(dropBlocks) > 0 {
+			log.Info("pushBlockChange drop blocks", "hash", block.Hash())
 			blockChange = &ptypes.BlockChangeNotification{
 				ChangeType: 2,
 				NewBlocks:  newBlocks,
 				DropBlocks: dropBlocks,
 			}
 		} else if len(newBlocks) > 0 {
+			log.Info("pushBlockChange new blocks", "hash", block.Hash())
 			blockChange = &ptypes.BlockChangeNotification{
 				ChangeType: 1,
 				NewBlocks:  newBlocks,

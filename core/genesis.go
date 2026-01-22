@@ -676,6 +676,7 @@ func (g *Genesis) Commit(db ethdb.Database, triedb *trie.Database) (*types.Block
 
 	blob, err := json.Marshal(g.Alloc)
 	if err != nil {
+		log.Crit("genesis Commit Failed to marshal alloc object")
 		return nil, err
 	}
 	// All the checks has passed, flush the states derived from the genesis
