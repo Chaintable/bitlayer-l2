@@ -90,7 +90,7 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 		blockNumber = block.Number()
 		allLogs     []*types.Log
 		gp          = new(GasPool).AddGas(block.GasLimit())
-		tracer      *vm.ActionLogger // ActionLogger or PipelineTracer must only one
+		//tracer      *vm.ActionLogger // ActionLogger or PipelineTracer must only one
 		//internalTxs types.InternalTxs
 	)
 	// Mutate the block and state according to any hard-fork specs
@@ -98,10 +98,10 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 		misc.ApplyDAOHardFork(statedb)
 	}
 
-	if cfg.TraceAction > 0 {
-		tracer = vm.NewActionLogger()
-		cfg.Tracer = tracer
-	}
+	//if cfg.TraceAction > 0 {
+	//	tracer = vm.NewActionLogger()
+	//	cfg.Tracer = tracer
+	//}
 
 	var (
 		context = NewEVMBlockContext(header, p.bc, nil)
@@ -145,36 +145,36 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 		receipts = append(receipts, receipt)
 		allLogs = append(allLogs, receipt.Logs...)
 
-		if cfg.TraceAction > 0 {
-			actions, _ := tracer.GetResult()
-			if len(actions) > 0 {
-				if receipt.Status == types.ReceiptStatusFailed {
-					for _, action := range actions {
-						action.Success = false
-					}
-				}
-				if cfg.TraceAction == 1 {
-					actionsTmp := make([]*types.Action, 0)
-					for i := 0; i < len(actions); i++ {
-						if actions[i].Value != nil && actions[i].Value.Cmp(big.NewInt(0)) != 0 {
-							actionsTmp = append(actionsTmp, actions[i])
-						}
-					}
-					if len(actionsTmp) > 0 {
-						internalTxs = append(internalTxs, &types.InternalTx{
-							TxHash:  tx.Hash(),
-							Actions: actionsTmp,
-						})
-					}
-				} else {
-					internalTxs = append(internalTxs, &types.InternalTx{
-						TxHash:  tx.Hash(),
-						Actions: actions,
-					})
-				}
-			}
-			tracer.Clear()
-		}
+		//if cfg.TraceAction > 0 {
+		//	actions, _ := tracer.GetResult()
+		//	if len(actions) > 0 {
+		//		if receipt.Status == types.ReceiptStatusFailed {
+		//			for _, action := range actions {
+		//				action.Success = false
+		//			}
+		//		}
+		//		if cfg.TraceAction == 1 {
+		//			actionsTmp := make([]*types.Action, 0)
+		//			for i := 0; i < len(actions); i++ {
+		//				if actions[i].Value != nil && actions[i].Value.Cmp(big.NewInt(0)) != 0 {
+		//					actionsTmp = append(actionsTmp, actions[i])
+		//				}
+		//			}
+		//			if len(actionsTmp) > 0 {
+		//				internalTxs = append(internalTxs, &types.InternalTx{
+		//					TxHash:  tx.Hash(),
+		//					Actions: actionsTmp,
+		//				})
+		//			}
+		//		} else {
+		//			internalTxs = append(internalTxs, &types.InternalTx{
+		//				TxHash:  tx.Hash(),
+		//				Actions: actions,
+		//			})
+		//		}
+		//	}
+		//	tracer.Clear()
+		//}
 	}
 	// Fail if Shanghai not enabled and len(withdrawals) is non-zero.
 	withdrawals := block.Withdrawals()
