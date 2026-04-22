@@ -29,9 +29,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Chaintable/pipeline/leader"
+	"github.com/Chaintable/pipeline/tracer"
 	ptypes "github.com/Chaintable/pipeline/types"
 
-	"github.com/Chaintable/pipeline/tracer"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/lru"
 	"github.com/ethereum/go-ethereum/common/mclock"
@@ -2730,45 +2731,60 @@ func (bc *BlockChain) getCommonAncestor(blocka ptypes.BlockContext, blockb ptype
 
 // pushBlockChange push block change to kafka, support debank union nodes
 func (bc *BlockChain) pushBlockChange(block *types.Block) {
-	// 先确保 pipeline tracer 不为空，然后再判断是否需要push kafka
-	// 上一个push kafka的block, 必然存在(至少有genesis block)
-	// 上一个push kafka的block比当前的head block还要新，说明有unwind回退，不需要处理, 即使是fork，等有更新的block的时候再一起push
-	if tracer.NodeXPusher != nil && tracer.NodeXPusher.LastPushedBlock().BlockNumber <= block.NumberU64() {
-		lastPushBlock := tracer.NodeXPusher.LastPushedBlock()
-		_, dropBlocks, newBlocks := bc.getCommonAncestor(*lastPushBlock, ptypes.BlockContext{
-			BlockNumber: block.NumberU64(),
-			Hash:        block.Hash(),
-			ParentHash:  block.ParentHash(),
-			Timestamp:   block.Time(),
-		})
-		var blockChange *ptypes.BlockChangeNotification
-		if len(dropBlocks) > 0 {
-			log.Info("pushBlockChange drop blocks", "hash", block.Hash())
-			blockChange = &ptypes.BlockChangeNotification{
-				ChangeType: 2,
-				NewBlocks:  newBlocks,
-				DropBlocks: dropBlocks,
-			}
-		} else if len(newBlocks) > 0 {
-			log.Info("pushBlockChange new blocks", "hash", block.Hash())
-			blockChange = &ptypes.BlockChangeNotification{
-				ChangeType: 1,
-				NewBlocks:  newBlocks,
-			}
-		}
+	if tracer.NodeXPusher == nil || leader.GlobalManager == nil {
+		return
+	}
+	// 只有 leader 才 push kafka，backup 节点直接返回。与 PushBlockChangeNotification
+	// 内部的 backup skip 对齐，同时避免 backup 上 LastPushedBlock 为 nil 时的解引用 panic
+	// (backup 节点不会触发 OnBecomeLeader，LastBlockNotice 永远为 nil)
+	if !leader.GlobalManager.IsLeader() {
+		return
+	}
 
-		parent := bc.GetHeaderByHash(block.Header().ParentHash)
+	leader.GlobalManager.RLock()
+	lastPushBlock := tracer.NodeXPusher.LastPushedBlock()
+	leader.GlobalManager.RUnlock()
 
-		if parent != nil && parent.Root == block.Root() {
-			bc.logger.OnCommit(parent.Root, block.Root(), nil, nil, nil, nil, nil, nil)
-		}
+	// lastPushBlock 为 nil: leader 刚当选但 UpdateLastBlock 还未成功（或失败被吞掉），
+	// 等下一个 block 再重试
+	// lastPushBlock.BlockNumber > block.NumberU64(): unwind 回退，等更新的 block 再一起 push
+	if lastPushBlock == nil || lastPushBlock.BlockNumber > block.NumberU64() {
+		return
+	}
 
-		if blockChange != nil {
-			err := tracer.NodeXPusher.PushBlockChangeNotification(blockChange)
-			if err != nil {
-				log.Error("SetCanonical PushBlockChangeNotification error", "err", err)
-			}
-			log.Info("NodeXPusher PushBlockChangeNotification", "blockChange", blockChange)
+	_, dropBlocks, newBlocks := bc.getCommonAncestor(*lastPushBlock, ptypes.BlockContext{
+		BlockNumber: block.NumberU64(),
+		Hash:        block.Hash(),
+		ParentHash:  block.ParentHash(),
+		Timestamp:   block.Time(),
+	})
+	var blockChange *ptypes.BlockChangeNotification
+	if len(dropBlocks) > 0 {
+		log.Info("pushBlockChange drop blocks", "hash", block.Hash())
+		blockChange = &ptypes.BlockChangeNotification{
+			ChangeType: 2,
+			NewBlocks:  newBlocks,
+			DropBlocks: dropBlocks,
 		}
+	} else if len(newBlocks) > 0 {
+		log.Info("pushBlockChange new blocks", "hash", block.Hash())
+		blockChange = &ptypes.BlockChangeNotification{
+			ChangeType: 1,
+			NewBlocks:  newBlocks,
+		}
+	}
+
+	parent := bc.GetHeaderByHash(block.Header().ParentHash)
+
+	if parent != nil && parent.Root == block.Root() {
+		bc.logger.OnCommit(parent.Root, block.Root(), nil, nil, nil, nil, nil, nil)
+	}
+
+	if blockChange != nil {
+		err := tracer.NodeXPusher.PushBlockChangeNotification(blockChange)
+		if err != nil {
+			log.Error("SetCanonical PushBlockChangeNotification error", "err", err)
+		}
+		log.Info("NodeXPusher PushBlockChangeNotification", "blockChange", blockChange)
 	}
 }
