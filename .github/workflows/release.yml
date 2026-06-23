@@ -41,6 +41,8 @@ jobs:
 
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Generate app token
         id: generate-token
@@ -91,6 +93,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Set revision
         run: echo "REVISION=${GITHUB_REF#refs/*/}" >> $GITHUB_ENV
