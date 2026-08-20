@@ -34,12 +34,6 @@ jobs:
         with:
           submodules: recursive
 
-      - uses: tibdex/github-app-token@v1
-        id: generate-token
-        with:
-          app_id: ${{ secrets.RELEASE_MANAGER_APP_ID }}
-          private_key: ${{ secrets.RELEASE_MANAGER_APP_SECRET }}
-
       - name: Set image tag
         run: echo "REVISION=$(git rev-parse --short=9 HEAD)-test" >> "$GITHUB_ENV"
 
@@ -66,5 +60,5 @@ jobs:
           push: true
           tags: ${{ env.REGISTRY }}/${{ env.IMAGE }}:${{ env.REVISION }}
           build-args: |
-            ACCESS_TOKEN=${{ steps.generate-token.outputs.token }}
+            ACCESS_TOKEN=${{ github.token }}
           provenance: false
