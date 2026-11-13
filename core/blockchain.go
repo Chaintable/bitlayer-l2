@@ -29,9 +29,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/Chaintable/pipeline/leader"
 	"github.com/Chaintable/pipeline/tracer"
-	ptypes "github.com/Chaintable/pipeline/types"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/lru"
@@ -2671,107 +2669,10 @@ func (bc *BlockChain) GetTrieFlushInterval() time.Duration {
 	return time.Duration(bc.flushInterval.Load())
 }
 
-// 返回两个块的共同祖先，以及两个块的从共同祖先到两个块的路径,即drop和new
-func (bc *BlockChain) getCommonAncestor(blocka ptypes.BlockContext, blockb ptypes.BlockContext) (ptypes.BlockContext, []ptypes.BlockContext, []ptypes.BlockContext) {
-	var (
-		chainA, chainB []ptypes.BlockContext
-	)
-	if blockb.ParentHash == blocka.Hash {
-		return blocka, chainA, []ptypes.BlockContext{blockb}
-	}
-	for blockb.BlockNumber > blocka.BlockNumber {
-		chainB = append(chainB, blockb)
-		headerb := bc.GetHeaderByHash(blockb.ParentHash)
-		if headerb == nil {
-			log.Crit("Failed to get header by hash", "hash", blockb.ParentHash)
-		} else {
-			blockb = ptypes.BlockContext{
-				BlockNumber: headerb.Number.Uint64(),
-				Hash:        headerb.Hash(),
-				ParentHash:  headerb.ParentHash,
-				Timestamp:   headerb.Time,
-			}
-		}
-	}
-	for blocka.Hash != blockb.Hash {
-		chainA = append(chainA, blocka)
-		headera := bc.GetHeaderByHash(blocka.ParentHash)
-		if headera == nil {
-			log.Crit("Failed to get header by hash", "hash", blocka.ParentHash)
-		} else {
-			blocka = ptypes.BlockContext{
-				BlockNumber: headera.Number.Uint64(),
-				Hash:        headera.Hash(),
-				ParentHash:  headera.ParentHash,
-				Timestamp:   headera.Time,
-			}
-		}
-
-		chainB = append(chainB, blockb)
-		headerb := bc.GetHeaderByHash(blockb.ParentHash)
-		if headerb == nil {
-			log.Crit("Failed to get header by hash", "hash", blockb.ParentHash)
-		} else {
-			blockb = ptypes.BlockContext{
-				BlockNumber: headerb.Number.Uint64(),
-				Hash:        headerb.Hash(),
-				ParentHash:  headerb.ParentHash,
-				Timestamp:   headerb.Time,
-			}
-		}
-	}
-	// now blocka == blockb == ancestor
-
-	// reverse chainA
-	slices.Reverse(chainA)
-	// reverse chainB
-	slices.Reverse(chainB)
-	return blocka, chainA, chainB
-}
-
 // pushBlockChange push block change to kafka, support debank union nodes
 func (bc *BlockChain) pushBlockChange(block *types.Block) {
-	if tracer.NodeXPusher == nil || leader.GlobalManager == nil {
+	if tracer.NodeXPusher == nil {
 		return
-	}
-	// 只有 leader 才 push kafka，backup 节点直接返回。与 PushBlockChangeNotification
-	// 内部的 backup skip 对齐，同时避免 backup 上 LastPushedBlock 为 nil 时的解引用 panic
-	// (backup 节点不会触发 OnBecomeLeader，LastBlockNotice 永远为 nil)
-	if !leader.GlobalManager.IsLeader() {
-		return
-	}
-
-	leader.GlobalManager.RLock()
-	lastPushBlock := tracer.NodeXPusher.LastPushedBlock()
-	leader.GlobalManager.RUnlock()
-
-	// lastPushBlock 为 nil: leader 刚当选但 UpdateLastBlock 还未成功（或失败被吞掉），
-	// 等下一个 block 再重试
-	// lastPushBlock.BlockNumber > block.NumberU64(): unwind 回退，等更新的 block 再一起 push
-	if lastPushBlock == nil || lastPushBlock.BlockNumber > block.NumberU64() {
-		return
-	}
-
-	_, dropBlocks, newBlocks := bc.getCommonAncestor(*lastPushBlock, ptypes.BlockContext{
-		BlockNumber: block.NumberU64(),
-		Hash:        block.Hash(),
-		ParentHash:  block.ParentHash(),
-		Timestamp:   block.Time(),
-	})
-	var blockChange *ptypes.BlockChangeNotification
-	if len(dropBlocks) > 0 {
-		log.Info("pushBlockChange drop blocks", "hash", block.Hash())
-		blockChange = &ptypes.BlockChangeNotification{
-			ChangeType: 2,
-			NewBlocks:  newBlocks,
-			DropBlocks: dropBlocks,
-		}
-	} else if len(newBlocks) > 0 {
-		log.Info("pushBlockChange new blocks", "hash", block.Hash())
-		blockChange = &ptypes.BlockChangeNotification{
-			ChangeType: 1,
-			NewBlocks:  newBlocks,
-		}
 	}
 
 	parent := bc.GetHeaderByHash(block.Header().ParentHash)
@@ -2780,11 +2681,16 @@ func (bc *BlockChain) pushBlockChange(block *types.Block) {
 		bc.logger.OnCommit(parent.Root, block.Root(), nil, nil, nil, nil, nil, nil)
 	}
 
-	if blockChange != nil {
-		err := tracer.NodeXPusher.PushBlockChangeNotification(blockChange, nil)
-		if err != nil {
-			log.Error("SetCanonical PushBlockChangeNotification error", "err", err)
-		}
-		log.Info("NodeXPusher PushBlockChangeNotification", "blockChange", blockChange)
+	// Pipeline owns the leader check, getCommonAncestor computation, and Kafka write gate.
+	// Backup nodes return immediately without any computation.
+	if err := tracer.NodeXPusher.NotifyBlockCommit(block, pipelineHeaderReader{bc}, nil); err != nil {
+		log.Error("NotifyBlockCommit error", "err", err)
 	}
+}
+
+// pipelineHeaderReader adapts BlockChain to the pipeline BlockChainReader interface.
+type pipelineHeaderReader struct{ bc *BlockChain }
+
+func (r pipelineHeaderReader) GetHeaderByHash2(hash common.Hash) *types.Header {
+	return r.bc.GetHeaderByHash(hash)
 }
