@@ -4,7 +4,7 @@ go 1.24
 
 require (
 	github.com/Azure/azure-sdk-for-go/sdk/storage/azblob v1.2.0
-	github.com/Chaintable/pipeline v0.0.70-bitlayer-v1.1.10-ct.2
+	github.com/Chaintable/pipeline v0.0.70-bitlayer-v1.1.10-debank-1.0.20261113074715-a41502373fc6
 	github.com/Microsoft/go-winio v0.6.1
 	github.com/VictoriaMetrics/fastcache v1.12.1
 	github.com/aws/aws-sdk-go-v2 v1.32.5
@@ -161,5 +161,3 @@ require (
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	rsc.io/tmplfunc v0.0.3 // indirect
 )
-
-replace github.com/Chaintable/pipeline => /tmp/pw/bitlayer-failover
